@@ -1,0 +1,25 @@
+{
+  "name": "webtorrent-ilp",
+  "version": "1.0.0",
+  "description": "WebTorrent + ILP",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ilp",
+    "interledger",
+    "webtorrent",
+    "bittorrent",
+    "micropayment"
+  ],
+  "author": "Evan Schwartz <evan@ripple.com>",
+  "license": "ISC",
+  "dependencies": {
+    "five-bells-sender": "^4.5.0",
+    "inherits": "^2.0.1",
+    "socket.io-client": "^1.4.5",
+    "superagent": "^1.8.1",
+    "webtorrent": "^0.78.1"
+  }
+}
