@@ -1,72 +1,99 @@
 'use strict'
 
-const socket = require('socket.io-client')
-const EventEmitter = require('events').EventEmitter
-const inherits = require('inherits')
-const sendPayment = require('five-bells-sender')
-const request = require('superagent')
+const BigNumber = require('bignumber.js')
+const WalletClient = require('./walletClient').WalletClient
 
 /**
- * Client for connecting to the five-bells-wallet
- * @param {String} opts.walletUri
- * @param {String} opts.username
- * @param {String} opts.password
+ * Manage payments for torrents
+ * @param {String} opts.walletAddress
+ * @param {String} opts.walletPassword
+ * @param {String|Number} opts.price Price per chunk
  */
 function PaymentManager (opts) {
-  EventEmitter.call(this)
+  this.price = new BigNumber(opts.price)
 
-  this.walletUri = opts.walletUri
-  this.account = this.walletUri + '/ledger/accounts/' + opts.username
-  this.username = opts.username
-  this.password = opts.password
-  this.socket = null
+  this._walletClient = new WalletClient({
+    address: opts.walletAddress,
+    password: opts.walletPassword,
+    walletUri: opts.walletUri
+  })
+  this.ready = false
+  this.account = null
+
+  // <public_key>: <balance>
+  this._peerBalances = {}
 }
-
-inherits(PaymentManager, EventEmitter)
 
 PaymentManager.prototype.connect = function () {
   const _this = this
-  console.log('Attempting to connect to wallet: ' + this.walletUri + '/socket.io')
-  this.socket = socket(this.walletUri, { path: '/api/socket.io' })
-  this.socket.emit('unsubscribe', _this.username)
-  this.socket.emit('subscribe', _this.username)
-  this.socket.on('connect', function () {
-    console.log('Connected to wallet API socket.io')
-  })
-  this.socket.on('disconnect', function () {
-    console.log('Disconnected from wallet')
-  })
-  this.socket.on('connect_error', function (err) {
-    console.log('Connection error', err, err.stack)
-  })
-  this.socket.on('payment', function (payment) {
-    if (payment.transfers) {
-      request.get(payment.transfers)
-        .end(function (err, res) {
-          if (err) {
-            console.log('Error getting transfer', err)
-            return
-          }
-          _this.emit('incoming', res.body)
-        })
-    }
+  this._walletClient.connect()
+  this._walletClient.on('ready', function () {
+    _this.ready = true
+    _this.account = _this._walletClient.account
+    _this._walletClient.on('incomingCredit', _this._handleIncomingCredit.bind(_this))
   })
 }
 
 PaymentManager.prototype.disconnect = function () {
-  this.socket.emit('unsubscribe', this.username)
+  this._walletClient.disconnect()
 }
 
-PaymentManager.prototype.sendPayment = function (params) {
-  params.sourceAccount = this.account
-  params.sourcePassword = this.password
-  sendPayment(params)
-    .then(function (result) {
-      console.log('Sent payment: ', result)
-    })
-    .catch(function (err) {
-      console.log('Error sending payment: ', (err && err.response && err.response.body ? err.response.body : err))
-    })
+PaymentManager.prototype.getBalance = function (peerPublicKey) {
+  if (this._peerBalances[peerPublicKey]) {
+    return this._peerBalances[peerPublicKey]
+  } else {
+    return new BigNumber(0)
+  }
+}
+
+PaymentManager.prototype.hasSufficientBalance = function (params) {
+  if (!params.peerPublicKey) {
+    return false
+  }
+  return this.getBalance(params.peerPublicKey).greaterThanOrEqualTo(this.price)
+}
+
+PaymentManager.prototype.chargeRequest = function (params) {
+  if (this.hasSufficientBalance(params)) {
+    this._peerBalances[params.peerPublicKey] = this._peerBalances[params.peerPublicKey].minus(this.price)
+    console.log('Charging peer ' + params.peerPublicKey + ' ' + this.price + ' for request. New Balance: ' + this._peerBalances[params.peerPublicKey])
+    return true
+  } else {
+    console.log('Peer ' + params.peerPublicKey + ' has insufficient balance: ' + this._peerBalances[params.peerPublicKey])
+    return false
+  }
+}
+
+PaymentManager.prototype.handlePaymentRequest = function (params) {
+  // TODO check if we actually want to send the payment
+  console.log('handlePaymentRequest', params)
+  this._walletClient.sendPayment(params)
+}
+
+PaymentManager.prototype._handleIncomingCredit = function (credit) {
+  // TODO don't check for string memos once https://github.com/interledger/five-bells-shared/pull/111 is merged
+  let memo
+  if (typeof credit.memo === 'string') {
+    try {
+      memo = JSON.parse(credit.memo)
+    } catch (e) {
+      console.log('Malformed memo', memo)
+    }
+  } else if (typeof credit.memo === object) {
+    memo = credit.memo
+  }
+
+  if (memo.public_key) {
+    if (!this._peerBalances[memo.public_key]) {
+      this._peerBalances[memo.public_key] = new BigNumber(0)
+    }
+
+    this._peerBalances[memo.public_key] = this._peerBalances[memo.public_key].plus(credit.amount)
+
+    console.log('Crediting peer for payment of ' + credit.amount + ' balance now: ' + this._peerBalances[memo.public_key])
+  } else {
+    console.log('Got unrelated payment notification', credit)
+  }
 }
 
 exports.PaymentManager = PaymentManager

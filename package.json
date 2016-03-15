@@ -16,10 +16,12 @@
   "author": "Evan Schwartz <evan@ripple.com>",
   "license": "ISC",
   "dependencies": {
+    "bignumber.js": "^2.3.0",
     "five-bells-sender": "^4.5.0",
     "inherits": "^2.0.1",
     "socket.io-client": "^1.4.5",
     "superagent": "^1.8.1",
+    "webfinger.js": "^2.3.2",
     "webtorrent": "^0.78.1"
   }
 }

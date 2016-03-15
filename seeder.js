@@ -3,9 +3,8 @@
 const WebTorrentIlp = require('./index')
 
 const seeder = new WebTorrentIlp({
-  walletUri: 'https://red.ilpdemo.org',
-  username: 'walt',
-  password: 'walt',
+  walletAddress: 'walt@red.ilpdemo.org',
+  walletPassword: 'walt',
   price: '0.0001',
     // TODO license should come from the torrent file
   license: {

@@ -3,9 +3,8 @@
 const WebTorrentIlp = require('./index')
 
 const leecher = new WebTorrentIlp({
-  walletUri: 'https://blue.ilpdemo.org',
-  username: 'alice',
-  password: 'alice',
+  walletAddress: 'alice@blue.ilpdemo.org',
+  walletPassword: 'alice',
   license: {
     content_hash: 'a3734717a96baaf7ab9afad20ac47371066acc6a',
     creator_account: "https://red.ilpdemo.org/ledger/accounts/walt",
