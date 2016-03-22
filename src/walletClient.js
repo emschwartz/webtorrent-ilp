@@ -31,6 +31,7 @@ inherits(WalletClient, EventEmitter)
 WalletClient.prototype.connect = function () {
   const _this = this
 
+  console.log('Account address:', this.address)
   return webfingerAddress(this.address)
     .then(function (account) {
       _this.account = account
@@ -48,18 +49,7 @@ WalletClient.prototype.connect = function () {
       _this.socket.on('connect_error', function (err) {
         console.log('Connection error', err, err.stack)
       })
-      _this.socket.on('payment', function (payment) {
-        if (payment.transfers) {
-          request.get(payment.transfers)
-            .end(function (err, res) {
-              if (err) {
-                console.log('Error getting transfer', err)
-                return
-              }
-              _this._checkIncomingTransfer(res.body)
-            })
-        }
-      })
+      _this.socket.on('payment', _this._handleNotification.bind(_this))
     })
     .catch(function (err) {
       console.log(err)
@@ -83,18 +73,27 @@ WalletClient.prototype.sendPayment = function (params) {
     })
 }
 
-WalletClient.prototype._checkIncomingTransfer = function (transfer) {
-  // Check if this payment was actually for us
-  let incomingCredit
-  for (let credit of transfer.credits) {
-    if (credit.account === this.account) {
-      incomingCredit = credit
+WalletClient.prototype._handleNotification = function (payment) {
+  const _this = this
+  if (payment.destination_account === _this.account) {
+    if (payment.transfers) {
+      request.get(payment.transfers)
+        .end(function (err, res) {
+          if (err) {
+            console.log('Error getting transfer', err)
+            return
+          }
+          const transfer = res.body
+          for (let credit of transfer.credits) {
+            if (credit.account === _this.account) {
+              _this.emit('incomingCredit', credit)
+            }
+          }
+        })
     }
+  } else if (payment.source_account === this.account) {
+    console.log(payment)
   }
-  if (!incomingCredit) {
-    return
-  }
-  this.emit('incomingCredit', incomingCredit)
 }
 
 // Returns a promise that resolves to the account details

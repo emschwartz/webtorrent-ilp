@@ -21,6 +21,7 @@ function PaymentManager (opts) {
   this.account = null
 
   // <public_key>: <balance>
+  // TODO keep track of more than the balance
   this._peerBalances = {}
 }
 
@@ -73,14 +74,10 @@ PaymentManager.prototype.handlePaymentRequest = function (params) {
 PaymentManager.prototype._handleIncomingCredit = function (credit) {
   // TODO don't check for string memos once https://github.com/interledger/five-bells-shared/pull/111 is merged
   let memo
-  if (typeof credit.memo === 'string') {
-    try {
-      memo = JSON.parse(credit.memo)
-    } catch (e) {
-      console.log('Malformed memo', memo)
-    }
-  } else if (typeof credit.memo === object) {
+  if (typeof credit.memo === 'object') {
     memo = credit.memo
+  } else {
+    memo = {}
   }
 
   if (memo.public_key) {
