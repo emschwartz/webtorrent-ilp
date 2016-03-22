@@ -9,8 +9,9 @@ const seeder = new WebTorrentIlp({
   price: '0.0001'
 })
 
-const seederTorrent = seeder.seed('/Users/eschwartz/Downloads/570994.PNG', {
-  announceList: [['http://localhost:8000/announce']]
+const seederTorrent = seeder.seed('/Users/eschwartz/Downloads/interledger.pdf', {
+  announceList: [['http://localhost:8000/announce']],
+  private: true
 })
 
 seeder.on('torrent', function (torrent) {

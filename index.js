@@ -61,9 +61,13 @@ function WebTorrentIlp (opts) {
       })
       wire.wt_ilp.on('ilp_handshake', function (details) {
         debug('Got extended handshake', details)
+        wire.wt_ilp.unchoke()
+      })
+      wire.wt_ilp.on('warning', function (err) {
+        debug('Error', err)
       })
 
-      // wire.wt_ilp.forceChoke()
+      wire.wt_ilp.forceChoke()
     })
   })
 }
