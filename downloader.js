@@ -1,6 +1,7 @@
 'use strict'
 
 const WebTorrentIlp = require('./index')
+const debug = require('debug')('WebTorrentIlp:downloader')
 
 const leecher = new WebTorrentIlp({
   walletAddress: 'alice@blue.ilpdemo.org',
@@ -15,8 +16,11 @@ const leecherTorrent = leecher.add(magnetURI, {
   announceList: [['http://localhost:8000/announce']]
 })
 leecherTorrent.on('download', function (chunkSize) {
-  console.log('leecher downloaded ' + chunkSize)
+  debug('leecher downloaded ' + chunkSize)
 })
 leecherTorrent.on('done', function () {
-  console.log('leecher done, downloaded ' + leecherTorrent.files.length + ' files')
+  debug('leecher done, downloaded ' + leecherTorrent.files.length + ' files')
+})
+leecherTorrent.on('wire', function (wire) {
+  debug('on wire')
 })

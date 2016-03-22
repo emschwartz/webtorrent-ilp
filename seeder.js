@@ -1,6 +1,7 @@
 'use strict'
 
 const WebTorrentIlp = require('./index')
+const debug = require('debug')('WebTorrentIlp:seeder')
 
 const seeder = new WebTorrentIlp({
   walletAddress: 'walt@red.ilpdemo.org',
