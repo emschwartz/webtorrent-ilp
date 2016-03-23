@@ -3,23 +3,22 @@
 const WebTorrent = require('webtorrent')
 const inherits = require('inherits')
 const wt_ilp = require('wt_ilp')
-const PaymentManager = require('./src/paymentManager').PaymentManager
 const moment = require('moment')
 const debug = require('debug')('WebTorrentIlp')
+const BigNumber = require('bignumber.js')
+const sendPayment = require('five-bells-sender')
 
 inherits(WebTorrentIlp, WebTorrent)
 
 function WebTorrentIlp (opts) {
   const _this = this
 
-  if (!opts.walletAddress) {
-    throw new Error('Must provide walletAddress')
-  }
-  if (!opts.walletPassword) {
-    throw new Error('Must provide walletPassword')
-  }
-
   WebTorrent.call(this, opts)
+
+  this.account = opts.account
+  this.password = opts.password
+  this.price = new BigNumber(opts.price)
+  this.publicKey = opts.publicKey
 
   this._catchTorrent('add', this._setupWtIlp.bind(_this))
   this._catchTorrent('download', this._setupWtIlp.bind(_this))
@@ -37,18 +36,40 @@ WebTorrentIlp.prototype._catchTorrent = function (fnName, fnToCall) {
 }
 
 WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
+  const _this = this
   torrent.on('wire', function (wire) {
     wire.use(wt_ilp({
-      account: 'opts.walletAddress',
-      price: '1',
-      publicKey: 'opts.publicKey'
+      account: _this.account,
+      price: _this.price,
+      publicKey: _this.publicKey
     }))
+    wire.wt_ilp.on('ilp_handshake', function (handshake) {
+      debug('Got extended handshake', handshake)
+      // wire.wt_ilp.unchoke()
+    })
     wire.wt_ilp.on('request', function () {
       debug('wt_ilp got request')
+      wire.wt_ilp.sendLowBalance(0)
     })
-    wire.wt_ilp.on('ilp_handshake', function (details) {
-      debug('Got extended handshake', details)
-      wire.wt_ilp.unchoke()
+    wire.wt_ilp.on('payment_request', function (peerReportedBalance) {
+      debug('Got payment request. Peer says our balance is: %s', peerReportedBalance)
+      const paymentParams = {
+        sourceAccount: _this.account,
+        sourcePassword: _this.password,
+        sourceAmount: _this.price.times(10).toString(),
+        destinationAccount: wire.wt_ilp.peerAccount,
+        destinationMemo: {
+          public_key: _this.publicKey
+        }
+      }
+      debug('About to send payment: %o', paymentParams)
+      sendPayment(paymentParams)
+      .then(function (result) {
+        debug('Sent payment', result)
+      })
+      .catch(function (err) {
+        debug('Error sending payment', err)
+      })
     })
     wire.wt_ilp.on('warning', function (err) {
       debug('Error', err)

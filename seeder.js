@@ -4,8 +4,8 @@ const WebTorrentIlp = require('./index')
 const debug = require('debug')('WebTorrentIlp:seeder')
 
 const seeder = new WebTorrentIlp({
-  walletAddress: 'walt@red.ilpdemo.org',
-  walletPassword: 'walt',
+  account: 'https://red.ilpdemo.org/ledger/accounts/walt',
+  password: 'walt',
   publicKey: '7cLvHbeOmx4TGZovRInmw37xSGHm6P96VM+Ng5z0+C8=',
   price: '0.0001'
 })

@@ -4,8 +4,8 @@ const WebTorrentIlp = require('./index')
 const debug = require('debug')('WebTorrentIlp:downloader')
 
 const leecher = new WebTorrentIlp({
-  walletAddress: 'alice@blue.ilpdemo.org',
-  walletPassword: 'alice',
+  account: 'https://blue.ilpdemo.org/ledger/accounts/alice',
+  password: 'alice',
   publicKey: 'lfFMEl9mWw56HygZGYejElw64wnKschRQSzu+JuZkVw=',
   price: '0.0001'
 })
