@@ -40,13 +40,14 @@ WalletClient.prototype.connect = function () {
 
       debug('Attempting to connect to wallet: ' + _this.walletUri + '/api/socket.io')
       _this.socket = socket(_this.walletUri, { path: '/api/socket.io' })
-      _this.socket.emit('subscribe', _this.username)
       _this.socket.on('connect', function () {
         debug('Connected to wallet API socket.io')
         _this.ready = true
         _this.emit('ready')
+        _this.socket.emit('subscribe', _this.username)
       })
       _this.socket.on('disconnect', function () {
+        _this.ready = false
         debug('Disconnected from wallet')
       })
       _this.socket.on('connect_error', function (err) {
@@ -81,24 +82,31 @@ WalletClient.prototype.sendPayment = function (params) {
 
 WalletClient.prototype._handleNotification = function (payment) {
   const _this = this
-  if (payment.destination_account === _this.account) {
-    if (payment.transfers) {
-      request.get(payment.transfers)
-        .end(function (err, res) {
-          if (err) {
-            debug('Error getting transfer', err)
-            return
+  debug('xxx got payment %o', payment)
+  if (payment.transfers) {
+    request.get(payment.transfers)
+      .end(function (err, res) {
+        if (err) {
+          debug('Error getting transfer', err)
+          return
+        }
+        const transfer = res.body
+        debug('xxx got transfer: %o', transfer)
+        if (transfer.state !== 'executed') {
+          return
+        }
+        // Look for incoming credits or outgoing debits involving us
+        for (let credit of transfer.credits) {
+          if (credit.account === _this.account) {
+            _this.emit('incoming', credit)
           }
-          const transfer = res.body
-          for (let credit of transfer.credits) {
-            if (credit.account === _this.account) {
-              _this.emit('incomingCredit', credit)
-            }
+        }
+        for (let debit of transfer.debits) {
+          if (debit.account === _this.account) {
+            _this.emit('outgoing', debit)
           }
-        })
-    }
-  } else if (payment.source_account === this.account) {
-    debug(payment)
+        }
+      })
   }
 }
 
