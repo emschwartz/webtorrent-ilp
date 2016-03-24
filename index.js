@@ -7,6 +7,7 @@ const moment = require('moment')
 const debug = require('debug')('WebTorrentIlp')
 const BigNumber = require('bignumber.js')
 const sendPayment = require('five-bells-sender')
+const WalletClient = require('./src/walletClient').WalletClient
 
 inherits(WebTorrentIlp, WebTorrent)
 
@@ -15,26 +16,60 @@ function WebTorrentIlp (opts) {
 
   WebTorrent.call(this, opts)
 
-  this.account = opts.account
+  this.address = opts.address
   this.password = opts.password
   this.price = new BigNumber(opts.price)
   this.publicKey = opts.publicKey
 
+  this.walletClient = new WalletClient({
+    address: opts.address,
+    password: opts.password
+  })
+  this.walletClient.connect()
+  this.walletClient.on('incoming', this._handleIncomingPayment.bind(this))
+
   // <peerPublicKey>: <totalSent>
   this.peersTotalSent = {}
 
-  this._catchTorrent('add', this._setupWtIlp.bind(_this))
-  this._catchTorrent('download', this._setupWtIlp.bind(_this))
-  this._catchTorrent('seed', this._setupWtIlp.bind(_this))
+  // Catch the torrents returned by the following methods to make them
+  // a) wait for the walletClient to be ready and
+  // b) use the wt_ilp extension
+  const functionsToCallOnTorrent = [this._waitForWalletClient.bind(this), this._setupWtIlp.bind(this)]
+  this._catchTorrent('seed', functionsToCallOnTorrent)
+  this._catchTorrent('add', functionsToCallOnTorrent)
+  this._catchTorrent('download', functionsToCallOnTorrent)
 }
 
-WebTorrentIlp.prototype._catchTorrent = function (fnName, fnToCall) {
+WebTorrentIlp.prototype._catchTorrent = function (fnName, functionsToCall) {
   const _this = this
   const oldFn = this[fnName]
   this[fnName] = function () {
     const torrent = oldFn.apply(_this, arguments)
-    fnToCall(torrent)
+    torrent.on('listening', function () {
+      debug('torrent is listening')
+    })
+    for (let fn of functionsToCall) {
+      fn(torrent)
+    }
     return torrent
+  }
+}
+
+WebTorrentIlp.prototype._waitForWalletClient = function (torrent) {
+  const _this = this
+  // Torrent._onParsedTorrent is the function that starts the swarm
+  // We want it to wait until the walletClient is ready
+  // TODO find a less hacky way of delaying the torrent's start
+  const _onParsedTorrent = torrent._onParsedTorrent
+  torrent._onParsedTorrent = function () {
+    const args = arguments
+    if (_this.walletClient.ready) {
+      _onParsedTorrent.apply(torrent, args)
+    } else {
+      _this.walletClient.once('ready', function () {
+        _onParsedTorrent.apply(torrent, args)
+      })
+    }
   }
 }
 
@@ -42,7 +77,7 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
   const _this = this
   torrent.on('wire', function (wire) {
     wire.use(wt_ilp({
-      account: _this.account,
+      account: _this.walletClient.account,
       price: _this.price,
       publicKey: _this.publicKey
     }))
@@ -95,8 +130,6 @@ WebTorrentIlp.prototype.checkSendPayment = function (params) {
     this.peersTotalSent[peerPublicKey] = this.peersTotalSent[peerPublicKey].plus(sourceAmount)
 
     const paymentParams = {
-      sourceAccount: _this.account,
-      sourcePassword: _this.password,
       sourceAmount: sourceAmount.toString(),
       destinationAccount: params.peerAccount,
       destinationMemo: {
@@ -104,19 +137,23 @@ WebTorrentIlp.prototype.checkSendPayment = function (params) {
       }
     }
     debug('About to send payment: %o', paymentParams)
-    sendPayment(paymentParams)
-    .then(function (result) {
-      debug('Sent payment', result)
-    })
-    .catch(function (err) {
-      // If there was an error, subtract the amount from what we've paid them
-      // TODO make sure we actually didn't pay them anything
-      _this.peersTotalSent[peerPublicKey] = _this.peersTotalSent[peerPublicKey].minus(sourceAmount)
-      debug('Error sending payment', err)
-    })
+    this.walletClient.sendPayment(paymentParams)
+      .then(function (result) {
+        debug('Sent payment', result)
+      })
+      .catch(function (err) {
+        // If there was an error, subtract the amount from what we've paid them
+        // TODO make sure we actually didn't pay them anything
+        _this.peersTotalSent[peerPublicKey] = _this.peersTotalSent[peerPublicKey].minus(sourceAmount)
+        debug('Error sending payment', err)
+      })
   } else {
     debug('Not sending any more money, our cost per byte with this peer is already: %s', costPerByte.toString())
   }
+}
+
+WebTorrentIlp.prototype._handleIncomingPayment = function (payment) {
+  debug('got incoming payment %o', payment)
 }
 
 module.exports = WebTorrentIlp

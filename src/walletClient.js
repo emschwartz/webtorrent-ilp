@@ -6,6 +6,7 @@ const inherits = require('inherits')
 const sendPayment = require('five-bells-sender')
 const request = require('superagent')
 const WebFinger = require('webfinger.js')
+const debug = require('debug')('WebTorrentIlp:WalletClient')
 
 /**
  * Client for connecting to the five-bells-wallet
@@ -24,6 +25,7 @@ function WalletClient (opts) {
   this.username = opts.address.split('@')[0]
 
   this.socket = null
+  this.ready = false
 }
 
 inherits(WalletClient, EventEmitter)
@@ -31,28 +33,29 @@ inherits(WalletClient, EventEmitter)
 WalletClient.prototype.connect = function () {
   const _this = this
 
-  console.log('Account address:', this.address)
+  debug('Account address:', this.address)
   return webfingerAddress(this.address)
     .then(function (account) {
       _this.account = account
 
-      console.log('Attempting to connect to wallet: ' + _this.walletUri + '/api/socket.io')
+      debug('Attempting to connect to wallet: ' + _this.walletUri + '/api/socket.io')
       _this.socket = socket(_this.walletUri, { path: '/api/socket.io' })
       _this.socket.emit('subscribe', _this.username)
       _this.socket.on('connect', function () {
-        console.log('Connected to wallet API socket.io')
+        debug('Connected to wallet API socket.io')
+        _this.ready = true
         _this.emit('ready')
       })
       _this.socket.on('disconnect', function () {
-        console.log('Disconnected from wallet')
+        debug('Disconnected from wallet')
       })
       _this.socket.on('connect_error', function (err) {
-        console.log('Connection error', err, err.stack)
+        debug('Connection error', err, err.stack)
       })
       _this.socket.on('payment', _this._handleNotification.bind(_this))
     })
     .catch(function (err) {
-      console.log(err)
+      debug(err)
     })
 }
 
@@ -63,14 +66,17 @@ WalletClient.prototype.disconnect = function () {
 WalletClient.prototype.sendPayment = function (params) {
   params.sourceAccount = this.account
   params.sourcePassword = this.password
-  console.log('sendPayment', params)
-  return sendPayment(params)
-    .then(function (result) {
-      console.log('Sent payment: ', result)
+  debug('sendPayment', params)
+  if (this.ready) {
+    return sendPayment(params)
+  } else {
+    return new Promise(function (resolve, reject) {
+      this.once('ready', resolve)
     })
-    .catch(function (err) {
-      console.log('Error sending payment: ', (err && err.response && err.response.body ? err.response.body : err))
+    .then(function () {
+      return sendPayment(params)
     })
+  }
 }
 
 WalletClient.prototype._handleNotification = function (payment) {
@@ -80,7 +86,7 @@ WalletClient.prototype._handleNotification = function (payment) {
       request.get(payment.transfers)
         .end(function (err, res) {
           if (err) {
-            console.log('Error getting transfer', err)
+            debug('Error getting transfer', err)
             return
           }
           const transfer = res.body
@@ -92,7 +98,7 @@ WalletClient.prototype._handleNotification = function (payment) {
         })
     }
   } else if (payment.source_account === this.account) {
-    console.log(payment)
+    debug(payment)
   }
 }
 
