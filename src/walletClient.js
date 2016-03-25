@@ -92,19 +92,20 @@ WalletClient.prototype._handleNotification = function (payment) {
           return
         }
         const transfer = res.body
-        if (transfer.state !== 'executed') {
-          return
-        }
-        // Look for incoming credits or outgoing debits involving us
-        for (let credit of transfer.credits) {
-          if (credit.account === _this.account) {
-            _this.emit('incoming', credit)
+        if (transfer.state === 'executed') {
+          // Look for incoming credits or outgoing debits involving us
+          for (let credit of transfer.credits) {
+            if (credit.account === _this.account) {
+              _this.emit('incoming', credit)
+            }
           }
         }
-        // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
-        for (let debit of transfer.debits) {
-          if (debit.account === _this.account) {
-            _this.emit('outgoing', debit)
+        if (transfer.state === 'rejected') {
+          // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
+          for (let debit of transfer.debits) {
+            if (debit.account === _this.account) {
+              _this.emit('outgoing_rejected', debit)
+            }
           }
         }
       })
