@@ -18,8 +18,7 @@ function WebTorrentIlp (opts) {
 
   this.address = opts.address
   this.password = opts.password
-  // TODO make price based on bytes @tomorrow
-  this.price = new BigNumber(opts.price)
+  this.price = new BigNumber(opts.price) // price per byte
   this.publicKey = opts.publicKey
 
   this.walletClient = new WalletClient({
@@ -34,14 +33,17 @@ function WebTorrentIlp (opts) {
   this.peersTotalSent = {}
   // <peerPublicKey>: <balance>
   this.peerBalances = {}
+  // <peerPublicKey>: <[wire, wire]>
+  this.peerWires = {}
 
   // Catch the torrents returned by the following methods to make them
   // a) wait for the walletClient to be ready and
   // b) use the wt_ilp extension
   const functionsToCallOnTorrent = [this._waitForWalletClient.bind(this), this._setupWtIlp.bind(this)]
   this._catchTorrent('seed', functionsToCallOnTorrent)
-  this._catchTorrent('add', functionsToCallOnTorrent)
   this._catchTorrent('download', functionsToCallOnTorrent)
+  // client.add is an alias for client.download
+  this.add = this.download
 }
 
 WebTorrentIlp.prototype._catchTorrent = function (fnName, functionsToCall) {
@@ -49,9 +51,6 @@ WebTorrentIlp.prototype._catchTorrent = function (fnName, functionsToCall) {
   const oldFn = this[fnName]
   this[fnName] = function () {
     const torrent = oldFn.apply(_this, arguments)
-    torrent.on('listening', function () {
-      debug('torrent is listening')
-    })
     for (let fn of functionsToCall) {
       fn(torrent)
     }
@@ -93,6 +92,10 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
     wire.wt_ilp.on('ilp_handshake', function (handshake) {
       debug('Got extended handshake', handshake)
       // wire.wt_ilp.unchoke()
+      if (!_this.peerWires[handshake.publicKey]) {
+        _this.peerWires[handshake.publicKey] = []
+      }
+      _this.peerWires[handshake.publicKey].push(wire)
     })
 
     // Charge peers for requesting data from us
@@ -113,15 +116,18 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
   })
 }
 
-WebTorrentIlp.prototype._chargePeerForRequest = function (wire, torrent) {
-  debug('wt_ilp got request')
+WebTorrentIlp.prototype._chargePeerForRequest = function (wire, torrent, bytesRequested) {
   const peerPublicKey = wire.wt_ilp.peerPublicKey
   const peerBalance = this.peerBalances[peerPublicKey]
-  if (peerBalance && peerBalance.greaterThan(this.price)) {
-    // TODO charge per byte (or megabyte) instead of per chunk
-    debug('charging peer ' + peerPublicKey + ' ' + this.price.toString() + ' for request')
-    this.peerBalances[wire.wt_ilp.peerPublicKey] = peerBalance.minus(this.price)
-    torrent.totalEarned = torrent.totalEarned.plus(this.price)
+
+  // TODO get smarter about how we price the amount (maybe based on torrent rarity?)
+  const amountToCharge = this.price.times(bytesRequested)
+
+  if (peerBalance && peerBalance.greaterThan(amountToCharge)) {
+    const newBalance = peerBalance.minus(amountToCharge)
+    this.peerBalances[wire.wt_ilp.peerPublicKey] = newBalance
+    debug('charging peer ' + peerPublicKey + ' ' + amountToCharge.toString() + ' for request. balance now: ' + newBalance)
+    torrent.totalEarned = torrent.totalEarned.plus(amountToCharge)
     wire.wt_ilp.unchoke()
   } else {
     wire.wt_ilp.sendLowBalance(0)
@@ -137,7 +143,6 @@ WebTorrentIlp.prototype._payPeer = function (wire, torrent) {
   const sourceAmount = this._calculateAmountToPay(wire, torrent)
 
   if (sourceAmount.greaterThan(0)) {
-
     // TODO make one function to track payments to peers and one to subtract it when necessary @tomorrow
     // Track how much we've sent to them
     this.peersTotalSent[peerPublicKey] = this.peersTotalSent[peerPublicKey].plus(sourceAmount)
@@ -183,31 +188,50 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
     torrent.spentPerPeer[peerPublicKey] = new BigNumber(0)
   }
 
-  const bytesDownloaded = wire.downloaded
-  const downloadSpeed = wire.downloadSpeed()
-  const amountSpentOnPeer = torrent.spentPerPeer[peerPublicKey]
-  const costPerByte = amountSpentOnPeer.div(bytesDownloaded)
-
-  debug('calculating amount to pay peer:')
-  debug('bytes downloaded: ' + bytesDownloaded)
-  debug('download speed: ' + downloadSpeed)
-  debug('amount spent: ' + amountSpentOnPeer)
-
-  // TODO base the maxCostPerByte on our price
-  const maxCostPerByte = '0.0000001'
-
   // If we've paid them and they haven't sent us anything, don't pay any more
-  if (bytesDownloaded === 0 && amountSpentOnPeer.greaterThan(0)) {
+  const amountSpentOnPeer = torrent.spentPerPeer[peerPublicKey]
+  if (wire.downloaded === 0 && amountSpentOnPeer.greaterThan(0)) {
     debug('not sending any more money until we get more data from the seeder')
     return new BigNumber(0)
   }
 
-  if (costPerByte.greaterThan(maxCostPerByte)) {
-    debug('not sending any more money because the cost per byte is too high: ' + costPerByte.toString())
-    return new BigNumber(0)
-  }
+  // To calculate the amount we're willing to spend, take into account:
+  // - how many peers are seeding the file
+  // - how far done it is
+  // - how high priority it is
+  // - whether this peer is faster than the average
 
-  return this.price.times(10)
+  // Peer stats
+  // TODO make sure we're tracking peer stats across multiple wires
+  const peerDownloadSpeed = wire.downloadSpeed()
+  const peerCostPerByte = amountSpentOnPeer.div(wire.downloaded)
+
+  const torrentAverageDownloadSpeed = torrent.downloadSpeed
+  const torrentPeers = torrent.numPeers
+  const torrentProgress = torrent.progress
+
+  // TODO make maxCostPerByte calculation more intelligent (based on how many other peers there are, their prices, etc)
+  const maxCostPerByte = this.price.times(2)
+
+  debug('calculating amount to pay peer:')
+  debug('bytes downloaded: ' + wire.downloaded)
+  debug('download speed: ' + peerDownloadSpeed)
+  debug('amount spent: ' + amountSpentOnPeer)
+  debug('peer costPerByte: ' + peerCostPerByte)
+  debug('torrentAverageDownloadSpeed: ' + torrentAverageDownloadSpeed)
+  debug('torrentPeers: ' + torrentPeers)
+  debug('torrentProgress: ' + torrentProgress)
+  debug('torrent length: ' + torrent.length)
+
+  const torrentBytesRemaining = new BigNumber(torrent.length - torrent.downloaded)
+  const avgBytesPerPeerRemaining = torrentBytesRemaining.div(torrentPeers)
+
+  // if (costPerByte.greaterThan(maxCostPerByte)) {
+  //   debug('not sending any more money because the cost per byte is too high: ' + costPerByte.toString())
+  //   return new BigNumber(0)
+  // }
+
+  return this.price.times(avgBytesPerPeerRemaining)
 }
 
 WebTorrentIlp.prototype._handleIncomingPayment = function (credit) {
@@ -216,10 +240,14 @@ WebTorrentIlp.prototype._handleIncomingPayment = function (credit) {
     if (!peerPublicKey) {
       return
     }
-    debug('crediting peer: ' + peerPublicKey + ' for payment of: ' + credit.amount)
     const previousBalance = this.peerBalances[peerPublicKey] || new BigNumber(0)
     const newBalance = previousBalance.plus(credit.amount)
+    debug('crediting peer: ' + peerPublicKey + ' for payment of: ' + credit.amount + '. balance now: ' + newBalance)
     this.peerBalances[peerPublicKey] = newBalance
+    // Unchoke all of this peer's wires
+    for (let wire of this.peerWires[peerPublicKey]) {
+      wire.unchoke()
+    }
   }
 }
 

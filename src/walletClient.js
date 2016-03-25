@@ -44,6 +44,7 @@ WalletClient.prototype.connect = function () {
         debug('Connected to wallet API socket.io')
         _this.ready = true
         _this.emit('ready')
+        _this.socket.emit('unsubscribe', _this.username)
         _this.socket.emit('subscribe', _this.username)
       })
       _this.socket.on('disconnect', function () {
@@ -82,8 +83,8 @@ WalletClient.prototype.sendPayment = function (params) {
 
 WalletClient.prototype._handleNotification = function (payment) {
   const _this = this
-  debug('xxx got payment %o', payment)
   if (payment.transfers) {
+    debug('got notification of transfer' + payment.transfers)
     request.get(payment.transfers)
       .end(function (err, res) {
         if (err) {
@@ -91,7 +92,6 @@ WalletClient.prototype._handleNotification = function (payment) {
           return
         }
         const transfer = res.body
-        debug('xxx got transfer: %o', transfer)
         if (transfer.state !== 'executed') {
           return
         }
@@ -101,6 +101,7 @@ WalletClient.prototype._handleNotification = function (payment) {
             _this.emit('incoming', credit)
           }
         }
+        // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
         for (let debit of transfer.debits) {
           if (debit.account === _this.account) {
             _this.emit('outgoing', debit)
