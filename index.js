@@ -112,9 +112,9 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
       const peerPublicKey = wire.wt_ilp.peerPublicKey
       if (peerPublicKey) {
         if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
-          torrent.bytesDownloadedFromPeer[peerPublicKey] = 0
+          torrent.bytesDownloadedFromPeer[peerPublicKey] = new BigNumber(0)
         }
-        torrent.bytesDownloadedFromPeer[peerPublicKey] += bytes
+        torrent.bytesDownloadedFromPeer[peerPublicKey] = torrent.bytesDownloadedFromPeer[peerPublicKey].plus(bytes)
       }
     })
 
@@ -212,29 +212,47 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
   if (!torrent.spentPerPeer[peerPublicKey]) {
     torrent.spentPerPeer[peerPublicKey] = new BigNumber(0)
   }
+  if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
+    torrent.bytesDownloadedFromPeer[peerPublicKey] = new BigNumber(0)
+  }
 
-  // If we've paid them and they haven't sent us anything, don't pay any more
+  // Peer stats
   const amountSpentOnPeer = torrent.spentPerPeer[peerPublicKey]
   const bytesDownloadedFromPeer = torrent.bytesDownloadedFromPeer[peerPublicKey]
+  const peerDownloadSpeed = wire.downloadSpeed()
+  const peerCostPerByte = bytesDownloadedFromPeer ? amountSpentOnPeer.div(bytesDownloadedFromPeer) : null
+
+  // Torrent stats
+  const torrentAverageDownloadSpeed = torrent.downloadSpeed
+  const torrentPeers = torrent.numPeers
+  const torrentProgress = torrent.progress
+  const torrentBytesRemaining = new BigNumber(torrent.length - torrent.downloaded)
+
+  // If we've paid them and they haven't sent us anything, don't pay any more
   if (bytesDownloadedFromPeer === 0 && amountSpentOnPeer.greaterThan(0)) {
     debug('not sending any more money until we get more data from the seeder (' + peerPublicKey.slice(0,8) + ')')
     return new BigNumber(0)
   }
 
-  // Peer stats
-  const peerDownloadSpeed = wire.downloadSpeed()
-  const peerCostPerByte = bytesDownloadedFromPeer ? amountSpentOnPeer.div(bytesDownloadedFromPeer) : null
-
-  const torrentAverageDownloadSpeed = torrent.downloadSpeed
-  const torrentPeers = torrent.numPeers
-  const torrentProgress = torrent.progress
-  const torrentBytesRemaining = new BigNumber(torrent.length - torrent.downloaded)
-  const bytesToPayFor = BigNumber.min(torrentBytesRemaining, 1000000)
-  const bytesToPayPeerFor = bytesToPayFor.div(torrentPeers)
-  const amountToPayPeer = this.price.times(bytesToPayPeerFor)
+  // Calculate how much to pay this peer
+  const bytesToPayAveragePeerFor = BigNumber.min(
+    torrentBytesRemaining.div(torrentPeers),
+    100000)
+  // We trust this peer to send us at least some fraction of what they've already sent us
+  // TODO take into account how much we've ever downloaded from this peer (not just from this torrent)
+  const bytesToTrustPeerFor = BigNumber.min(
+    bytesDownloadedFromPeer.times(0.75),
+    torrentBytesRemaining)
+  const bytesToPayPeerFor = BigNumber.max(
+    bytesToPayAveragePeerFor,
+    bytesToTrustPeerFor)
+  // TODO get precision and scale from the ledger
+  const minLedgerAmount = 0.0001
+  const amountToPayPeer = BigNumber.max(
+    this.price.times(bytesToPayPeerFor),
+    minLedgerAmount)
 
   // TODO take into account the peer price and download speed when determining how much to send them
-  // TODO take into account how much we've downloaded from the peer / how much we "trust" them in figuring out how much to send
 
   debug('calculating amount to pay peer:')
   debug('bytes downloaded: ' + bytesDownloadedFromPeer)
@@ -246,11 +264,10 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
   debug('torrentProgress: ' + torrentProgress)
   debug('torrent length: ' + torrent.length)
   debug('torrentBytesRemaining: ' + torrentBytesRemaining)
-  debug('bytesToPayFor: ' + bytesToPayFor)
   debug('bytesToPayPeerFor: ' + bytesToPayPeerFor)
   debug('amountToPayPeer: ' + amountToPayPeer)
 
-  return this.price.times(bytesToPayFor)
+  return amountToPayPeer
 }
 
 WebTorrentIlp.prototype._handleIncomingPayment = function (credit) {
