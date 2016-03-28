@@ -84,6 +84,8 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
   torrent.totalCost = new BigNumber(0)
   torrent.totalEarned = new BigNumber(0)
   torrent.spentPerPeer = {}
+  // Keep track of how much we've downloaded from each peer across different wire instances
+  torrent.bytesDownloadedFromPeer = {}
 
   torrent.on('wire', function (wire) {
     wire.use(wt_ilp({
@@ -106,6 +108,16 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
     // Pay peers who we are downloading from
     wire.wt_ilp.on('payment_request', _this._payPeer.bind(_this, wire, torrent))
 
+    wire.on('download', function (bytes) {
+      const peerPublicKey = wire.wt_ilp.peerPublicKey
+      if (peerPublicKey) {
+        if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
+          torrent.bytesDownloadedFromPeer[peerPublicKey] = 0
+        }
+        torrent.bytesDownloadedFromPeer[peerPublicKey] += bytes
+      }
+    })
+
     wire.wt_ilp.on('warning', function (err) {
       debug('Error', err)
     })
@@ -113,7 +125,7 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
     wire.wt_ilp.forceChoke()
   })
 
-  torrent.on('download', function () {
+  torrent.on('done', function () {
     debug('torrent total cost: ' + torrent.totalCost.toString())
   })
 }
@@ -149,8 +161,6 @@ WebTorrentIlp.prototype._payPeer = function (wire, torrent) {
   }
 
   const peerAccount = wire.wt_ilp.peerAccount
-
-  // TODO make sure we don't have two payments in flight for the same peer at the same time
 
   const sourceAmount = this._calculateAmountToPay(wire, torrent)
 
@@ -204,39 +214,30 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
   }
 
   // If we've paid them and they haven't sent us anything, don't pay any more
-  // TODO @tomorrow make sure if the wire resets we don't forget how much we've already downloaded from the peer
   const amountSpentOnPeer = torrent.spentPerPeer[peerPublicKey]
-  if (wire.downloaded === 0 && amountSpentOnPeer.greaterThan(0)) {
+  const bytesDownloadedFromPeer = torrent.bytesDownloadedFromPeer[peerPublicKey]
+  if (bytesDownloadedFromPeer === 0 && amountSpentOnPeer.greaterThan(0)) {
     debug('not sending any more money until we get more data from the seeder (' + peerPublicKey.slice(0,8) + ')')
     return new BigNumber(0)
   }
 
-  // To calculate the amount we're willing to spend, take into account:
-  // - how many peers are seeding the file
-  // - how far done it is
-  // - how high priority it is
-  // - whether this peer is faster than the average
-
   // Peer stats
-  // TODO make sure we're tracking peer stats across multiple wires
   const peerDownloadSpeed = wire.downloadSpeed()
-  const peerCostPerByte = amountSpentOnPeer.div(wire.downloaded || 0)
+  const peerCostPerByte = bytesDownloadedFromPeer ? amountSpentOnPeer.div(bytesDownloadedFromPeer) : null
 
   const torrentAverageDownloadSpeed = torrent.downloadSpeed
   const torrentPeers = torrent.numPeers
   const torrentProgress = torrent.progress
   const torrentBytesRemaining = new BigNumber(torrent.length - torrent.downloaded)
-  const avgBytesPerPeerRemaining = torrentBytesRemaining.div(torrentPeers)
+  const bytesToPayFor = BigNumber.min(torrentBytesRemaining, 1000000)
+  const bytesToPayPeerFor = bytesToPayFor.div(torrentPeers)
+  const amountToPayPeer = this.price.times(bytesToPayPeerFor)
 
-  // TODO make maxCostPerByte calculation more intelligent (based on how many other peers there are, their prices, etc)
-  // const maxCostPerByte = this.price.times(2)
-  // if (peerCostPerByte.greaterThan(maxCostPerByte)) {
-  //   debug('not sending any more money because the cost per byte is too high: ' + peerCostPerByte.toString() + ' (' + peerPublicKey.slice(0,8) + ')')
-  //   return new BigNumber(0)
-  // }
+  // TODO take into account the peer price and download speed when determining how much to send them
+  // TODO take into account how much we've downloaded from the peer / how much we "trust" them in figuring out how much to send
 
   debug('calculating amount to pay peer:')
-  debug('bytes downloaded: ' + wire.downloaded)
+  debug('bytes downloaded: ' + bytesDownloadedFromPeer)
   debug('download speed: ' + peerDownloadSpeed)
   debug('amount spent: ' + amountSpentOnPeer)
   debug('peer costPerByte: ' + peerCostPerByte)
@@ -245,13 +246,9 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
   debug('torrentProgress: ' + torrentProgress)
   debug('torrent length: ' + torrent.length)
   debug('torrentBytesRemaining: ' + torrentBytesRemaining)
-  debug('avgBytesPerPeerRemaining: ' + avgBytesPerPeerRemaining)
-
-  // If the file is very large you only want to pay per megabyte or something like that
-  // If the download time is long there's a higher chance of more peers joining
-  // TODO use the peer's price to calculate bytesToPayFor
-  const bytesToPayFor = BigNumber.min(avgBytesPerPeerRemaining, 10000)
   debug('bytesToPayFor: ' + bytesToPayFor)
+  debug('bytesToPayPeerFor: ' + bytesToPayPeerFor)
+  debug('amountToPayPeer: ' + amountToPayPeer)
 
   return this.price.times(bytesToPayFor)
 }
