@@ -23,6 +23,7 @@
     "socket.io-client": "^1.4.5",
     "superagent": "^1.8.1",
     "webfinger.js": "^2.3.2",
-    "webtorrent": "^0.78.1"
+    "webtorrent": "^0.78.1",
+    "wt_ilp": "git@github.com:interledger/wt_ilp.git"
   }
 }
