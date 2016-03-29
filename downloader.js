@@ -1,29 +1,24 @@
 'use strict'
 
 const WebTorrentIlp = require('./index')
+const debug = require('debug')('WebTorrentIlp:downloader')
+const crypto = require('crypto')
 
 const leecher = new WebTorrentIlp({
-  walletAddress: 'alice@blue.ilpdemo.org',
-  walletPassword: 'alice',
-  license: {
-    content_hash: 'a3734717a96baaf7ab9afad20ac47371066acc6a',
-    creator_account: "https://red.ilpdemo.org/ledger/accounts/walt",
-    creator_public_key: "QwRCBaiU95sIYi19/A4PqSpz93lQpchheiS1BVtlnVM=",
-    license: "https://creativecommons.org/licenses/pay/1.0",
-    licensee_public_key: 'lfFMEl9mWw56HygZGYejElw64wnKschRQSzu+JuZkVw=',
-    expires_at: '2016-06-01T12:00:00Z',
-    signature: 'thanks!'
-  }
+  address: process.env.ADDRESS || 'alice@blue.ilpdemo.org',
+  password: process.env.PASSWORD || 'alice',
+  publicKey: crypto.randomBytes(32).toString('base64'),
+  price: process.env.PRICE || '0.00000000001'
 })
 
-const magnetURI = 'magnet:?xt=urn:btih:a3734717a96baaf7ab9afad20ac47371066acc6a&dn=570994.PNG&tr=http%3A%2F%2Flocalhost%3A8000%2Fannounce'
+const magnetURI = process.argv.length > 2 ? process.argv[2] : 'magnet:?xt=urn:btih:eca3080363229696b44f99f12e1cab902965777d&dn=interledger.pdf&tr=http%3A%2F%2Flocalhost%3A8000%2Fannounce'
 
 const leecherTorrent = leecher.add(magnetURI, {
   announceList: [['http://localhost:8000/announce']]
 })
-leecherTorrent.on('download', function (chunkSize) {
-  console.log('leecher downloaded ' + chunkSize)
-})
 leecherTorrent.on('done', function () {
-  console.log('leecher done, downloaded ' + leecherTorrent.files.length + ' files')
+  debug('leecher done, downloaded ' + leecherTorrent.files.length + ' files')
+})
+leecherTorrent.on('wire', function (wire) {
+  debug('on wire')
 })

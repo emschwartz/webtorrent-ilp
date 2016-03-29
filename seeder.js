@@ -1,25 +1,21 @@
 'use strict'
 
 const WebTorrentIlp = require('./index')
+const debug = require('debug')('WebTorrentIlp:seeder')
+const crypto = require('crypto')
 
 const seeder = new WebTorrentIlp({
-  walletAddress: 'walt@red.ilpdemo.org',
-  walletPassword: 'walt',
-  price: '0.0001',
-    // TODO license should come from the torrent file
-  license: {
-    content_hash: 'a3734717a96baaf7ab9afad20ac47371066acc6a',
-    creator_account: "https://red.ilpdemo.org/ledger/accounts/walt",
-    creator_public_key: "QwRCBaiU95sIYi19/A4PqSpz93lQpchheiS1BVtlnVM=",
-    license: "https://creativecommons.org/licenses/pay/1.0",
-    licensee_public_key: '7cLvHbeOmx4TGZovRInmw37xSGHm6P96VM+Ng5z0+C8=',
-    expires_at: '2016-06-01T12:00:00Z',
-    signature: 'thanks!'
-  }
+  address: process.env.ADDRESS || 'walt@red.ilpdemo.org',
+  password: process.env.PASSWORD || 'walt',
+  publicKey: crypto.randomBytes(32).toString('base64'),
+  price: process.env.PRICE || '0.00000000001'
 })
 
-const seederTorrent = seeder.seed('/Users/eschwartz/Downloads/570994.PNG', {
-  announceList: [['http://localhost:8000/announce']]
+const file = process.argv.length > 2 ? process.argv[2] : '/Users/eschwartz/Downloads/interledger.pdf'
+
+const seederTorrent = seeder.seed(file, {
+  announceList: [['http://localhost:8000/announce']],
+  private: true
 })
 
 seeder.on('torrent', function (torrent) {
