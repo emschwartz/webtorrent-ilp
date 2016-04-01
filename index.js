@@ -38,8 +38,6 @@ function WebTorrentIlp (opts) {
   this.peerBalances = {}
   // <peerPublicKey>: <[wire, wire]>
   this.peerWires = {}
-  // <peerPublicKey>: <true/false>
-  this.peerPaymentInFlight = {}
 
   // Catch the torrents returned by the following methods to make them
   // a) wait for the walletClient to be ready and
@@ -112,6 +110,7 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
     wire.wt_ilp.on('payment_request', _this._payPeer.bind(_this, wire, torrent))
 
     wire.on('download', function (bytes) {
+      // TODO @tomorrow make sure we're properly crediting peers for how many bytes they send to us
       const peerPublicKey = wire.wt_ilp.peerPublicKey
       if (peerPublicKey) {
         if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
@@ -157,14 +156,7 @@ WebTorrentIlp.prototype._chargePeerForRequest = function (wire, torrent, bytesRe
 WebTorrentIlp.prototype._payPeer = function (wire, torrent) {
   const _this = this
   const peerPublicKey = wire.wt_ilp.peerPublicKey
-
-  if (this.peerPaymentInFlight[peerPublicKey]) {
-    debug('peer payment already in flight, not sending another (' + peerPublicKey.slice(0,8) + ')')
-    return
-  }
-
   const peerAccount = wire.wt_ilp.peerAccount
-
   const sourceAmount = this._calculateAmountToPay(wire, torrent)
 
   if (sourceAmount.greaterThan(0)) {
@@ -189,22 +181,19 @@ WebTorrentIlp.prototype._payPeer = function (wire, torrent) {
       }
     }
     debug('About to send payment: %o', paymentParams)
-    this.peerPaymentInFlight[peerPublicKey] = true
+    this.emit('outgoing_payment', {
+      peerPublicKey: peerPublicKey,
+      amount: sourceAmount.toString()
+    })
     this.walletClient.sendPayment(paymentParams)
       .then(function (result) {
         debug('Sent payment', result)
-        _this.peerPaymentInFlight[peerPublicKey] = false
-        _this.emit('outgoing_payment', {
-          peerPublicKey: peerPublicKey,
-          amount: sourceAmount
-        })
       })
       .catch(function (err) {
         // If there was an error, subtract the amount from what we've paid them
         // TODO make sure we actually didn't pay them anything
         _this.peersTotalSent[peerPublicKey] = _this.peersTotalSent[peerPublicKey].minus(sourceAmount)
         torrent.totalCost = torrent.totalCost.minus(sourceAmount)
-        _this.peerPaymentInFlight[peerPublicKey] = false
         debug('Error sending payment', err.stack)
       })
   }
@@ -254,7 +243,7 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
     bytesToPayAveragePeerFor,
     bytesToTrustPeerFor)
   // TODO get precision and scale from the ledger
-  const minLedgerAmount = 0.0001
+  const minLedgerAmount = 0.0002
   // TODO make sure we don't overpay for a torrent when downloading from multiple peers
   const amountToPayPeer = BigNumber.max(
     this.price.times(bytesToPayPeerFor),
