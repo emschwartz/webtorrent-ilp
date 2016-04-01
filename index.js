@@ -28,6 +28,9 @@ function WebTorrentIlp (opts) {
   this.walletClient.connect()
   this.walletClient.on('incoming', this._handleIncomingPayment.bind(this))
   this.walletClient.on('outgoing', this._handleOutgoingPayment.bind(this))
+  this.walletClient.on('ready', function () {
+    _this.emit('wallet_ready')
+  })
 
   // <peerPublicKey>: <totalSent>
   this.peersTotalSent = {}
@@ -132,13 +135,13 @@ WebTorrentIlp.prototype._setupWtIlp = function (torrent) {
 
 WebTorrentIlp.prototype._chargePeerForRequest = function (wire, torrent, bytesRequested) {
   const peerPublicKey = wire.wt_ilp.peerPublicKey
-  const peerBalance = this.peerBalances[peerPublicKey]
+  const peerBalance = this.peerBalances[peerPublicKey] || new BigNumber(0)
 
   // TODO get smarter about how we price the amount (maybe based on torrent rarity?)
   const amountToCharge = this.price.times(bytesRequested)
 
   // TODO send low balance notice when the balance is low, not just when it's too low to make another request
-  if (peerBalance && peerBalance.greaterThan(amountToCharge)) {
+  if (peerBalance.greaterThan(amountToCharge)) {
     const newBalance = peerBalance.minus(amountToCharge)
     this.peerBalances[wire.wt_ilp.peerPublicKey] = newBalance
     debug('charging ' + amountToCharge.toString() + ' for request. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0,8) + ')')
@@ -146,7 +149,7 @@ WebTorrentIlp.prototype._chargePeerForRequest = function (wire, torrent, bytesRe
     wire.wt_ilp.unchoke()
   } else {
     debug('low balance: ' + peerBalance + '(' + peerPublicKey.slice(0,8) + ')')
-    wire.wt_ilp.sendLowBalance(peerBalance ? peerBalance.toString() : '0')
+    wire.wt_ilp.sendLowBalance(peerBalance.toString())
     wire.wt_ilp.forceChoke()
   }
 }
@@ -191,6 +194,10 @@ WebTorrentIlp.prototype._payPeer = function (wire, torrent) {
       .then(function (result) {
         debug('Sent payment', result)
         _this.peerPaymentInFlight[peerPublicKey] = false
+        _this.emit('outgoing_payment', {
+          peerPublicKey: peerPublicKey,
+          amount: sourceAmount
+        })
       })
       .catch(function (err) {
         // If there was an error, subtract the amount from what we've paid them
@@ -248,6 +255,7 @@ WebTorrentIlp.prototype._calculateAmountToPay = function (wire, torrent) {
     bytesToTrustPeerFor)
   // TODO get precision and scale from the ledger
   const minLedgerAmount = 0.0001
+  // TODO make sure we don't overpay for a torrent when downloading from multiple peers
   const amountToPayPeer = BigNumber.max(
     this.price.times(bytesToPayPeerFor),
     minLedgerAmount)
@@ -280,6 +288,10 @@ WebTorrentIlp.prototype._handleIncomingPayment = function (credit) {
     const newBalance = previousBalance.plus(credit.amount)
     debug('crediting peer for payment of: ' + credit.amount + '. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0,8) + ')')
     this.peerBalances[peerPublicKey] = newBalance
+    this.emit('incoming_payment', {
+      peerPublicKey: peerPublicKey,
+      amount: credit.amount
+    })
     // Unchoke all of this peer's wires
     for (let wire of this.peerWires[peerPublicKey]) {
       wire.unchoke()

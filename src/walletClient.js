@@ -84,7 +84,6 @@ WalletClient.prototype.sendPayment = function (params) {
 WalletClient.prototype._handleNotification = function (payment) {
   const _this = this
   if (payment.transfers) {
-    debug('got notification of transfer' + payment.transfers)
     request.get(payment.transfers)
       .end(function (err, res) {
         if (err) {
@@ -92,6 +91,7 @@ WalletClient.prototype._handleNotification = function (payment) {
           return
         }
         const transfer = res.body
+        debug('got notification of transfer ' + payment.transfers, transfer)
         if (transfer.state === 'executed') {
           // Look for incoming credits or outgoing debits involving us
           for (let credit of transfer.credits) {
@@ -114,7 +114,8 @@ WalletClient.prototype._handleNotification = function (payment) {
 
 // Returns a promise that resolves to the account details
 function webfingerAddress (address) {
-  const webfinger = new WebFinger()
+  const WebFingerConstructor = (window && typeof WebFinger !== 'function' ? window.WebFinger : WebFinger)
+  const webfinger = new WebFingerConstructor()
   return new Promise(function (resolve, reject) {
     webfinger.lookup(address, function (err, res) {
       if (err) {
