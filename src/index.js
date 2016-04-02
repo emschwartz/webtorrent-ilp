@@ -94,6 +94,9 @@ export default class WebTorrentIlp extends WebTorrent {
 
       // Charge peers for requesting data from us
       wire.wt_ilp.on('request', this._chargePeerForRequest.bind(this, wire, torrent))
+      wire.wt_ilp.on('payment_request_too_high', (amount) => {
+        debug('Got payment_request_too_high' + (amount ? ' ' + amount : ''))
+      })
 
       // Pay peers who we are downloading from
       wire.wt_ilp.on('payment_request', this._payPeer.bind(this, wire, torrent))
@@ -128,7 +131,6 @@ export default class WebTorrentIlp extends WebTorrent {
     // TODO get smarter about how we price the amount (maybe based on torrent rarity?)
     const amountToCharge = this.price.times(bytesRequested)
 
-    // TODO send low balance notice when the balance is low, not just when it's too low to make another request
     if (peerBalance.greaterThan(amountToCharge)) {
       const newBalance = peerBalance.minus(amountToCharge)
       this.peerBalances[wire.wt_ilp.peerPublicKey] = newBalance
@@ -195,6 +197,7 @@ export default class WebTorrentIlp extends WebTorrent {
           })
       } else {
         debug('Decider told us not to fulfill request %o', paymentRequest)
+        wire.wt_ilp.sendPaymentRequestTooHigh()
       }
     })
   }
