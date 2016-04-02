@@ -8,6 +8,7 @@ import sendPayment from 'five-bells-sender'
 import WalletClient from './walletClient'
 import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
+import Decider from './decider'
 
 export default class WebTorrentIlp extends WebTorrent {
   constructor (opts) {
@@ -18,6 +19,8 @@ export default class WebTorrentIlp extends WebTorrent {
     this.price = new BigNumber(opts.price) // price per byte
     this.publicKey = opts.publicKey
 
+    this.decider = new Decider()
+
     this.walletClient = new WalletClient({
       address: opts.address,
       password: opts.password
@@ -27,8 +30,6 @@ export default class WebTorrentIlp extends WebTorrent {
     this.walletClient.on('outgoing', this._handleOutgoingPayment.bind(this))
     this.walletClient.on('ready', () => this.emit('wallet_ready'))
 
-    // <peerPublicKey>: <totalSent>
-    this.peersTotalSent = {}
     // <peerPublicKey>: <balance>
     this.peerBalances = {}
     // <peerPublicKey>: <[wire, wire]>
@@ -75,12 +76,7 @@ export default class WebTorrentIlp extends WebTorrent {
   }
 
   _setupWtIlp (torrent) {
-    // TODO keep track of how much we send to each peer per torrent
-    torrent.totalCost = new BigNumber(0)
     torrent.totalEarned = new BigNumber(0)
-    torrent.spentPerPeer = {}
-    // Keep track of how much we've downloaded from each peer across different wire instances
-    torrent.bytesDownloadedFromPeer = {}
 
     torrent.on('wire', (wire) => {
       wire.use(wt_ilp({
@@ -104,14 +100,11 @@ export default class WebTorrentIlp extends WebTorrent {
       wire.wt_ilp.on('payment_request', this._payPeer.bind(this, wire, torrent))
 
       wire.on('download', (bytes) => {
-        // TODO @tomorrow make sure we're properly crediting peers for how many bytes they send to us
-        const peerPublicKey = wire.wt_ilp.peerPublicKey
-        if (peerPublicKey) {
-          if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
-            torrent.bytesDownloadedFromPeer[peerPublicKey] = new BigNumber(0)
-          }
-          torrent.bytesDownloadedFromPeer[peerPublicKey] = torrent.bytesDownloadedFromPeer[peerPublicKey].plus(bytes)
-        }
+        this.decider.recordDelivery({
+          publicKey: wire.wt_ilp.peerPublicKey,
+          torrentHash: torrent.infoHash,
+          bytes: bytes
+        })
       })
 
       wire.wt_ilp.on('warning', (err) => {
@@ -122,7 +115,11 @@ export default class WebTorrentIlp extends WebTorrent {
     })
 
     torrent.on('done', () => {
-      debug('torrent total cost: ' + torrent.totalCost.toString())
+      this.decider.getTotalSent({
+        torrentHash: torrent.infoHash
+      }).then(amount => {
+        debug('torrent total cost: ' + amount)
+      })
     })
   }
 
@@ -141,123 +138,56 @@ export default class WebTorrentIlp extends WebTorrent {
       torrent.totalEarned = torrent.totalEarned.plus(amountToCharge)
       wire.wt_ilp.unchoke()
     } else {
-      debug('low balance: ' + peerBalance + '(' + peerPublicKey.slice(0,8) + ')')
-      wire.wt_ilp.sendLowBalance(peerBalance.toString())
+      // TODO handle the min ledger amount more elegantly
+      const MIN_LEDGER_AMOUNT = '0.0001'
+      wire.wt_ilp.sendPaymentRequest(BigNumber.max(amountToCharge, MIN_LEDGER_AMOUNT))
       wire.wt_ilp.forceChoke()
     }
   }
 
-  _payPeer (wire, torrent) {
-    const peerPublicKey = wire.wt_ilp.peerPublicKey
-    const peerAccount = wire.wt_ilp.peerAccount
-    const sourceAmount = this._calculateAmountToPay(wire, torrent)
-
-    if (sourceAmount.greaterThan(0)) {
-      // TODO make one function to track payments to peers and one to subtract it when necessary @tomorrow
-      // Track how much we've sent to them
-      this.peersTotalSent[peerPublicKey] = this.peersTotalSent[peerPublicKey].plus(sourceAmount)
-
-      // Track how much we've sent them for this torrent
-      torrent.spentPerPeer[peerPublicKey] = torrent.spentPerPeer[peerPublicKey].plus(sourceAmount)
-
-      // Track torrent total cost
-      torrent.totalCost = torrent.totalCost.plus(sourceAmount)
-
-      const paymentParams = {
-        sourceAmount: sourceAmount.toString(),
-        destinationAccount: peerAccount,
-        destinationMemo: {
-          public_key: this.publicKey
-        },
-        sourceMemo: {
-          public_key: peerPublicKey
+  _payPeer (wire, torrent, requestedAmount) {
+    // TODO @tomorrow Do pathfinding to normalize amount first
+    const sourceAmount = requestedAmount //this.walletClient.getSourceAmount(requestedAmount)
+    const paymentRequest = {
+      sourceAmount: requestedAmount,
+      publicKey: wire.wt_ilp.peerPublicKey,
+      destinationAccount: wire.wt_ilp.peerAccount,
+      torrentHash: torrent.infoHash,
+      torrentBytesRemaining: torrent.length - torrent.downloaded,
+      timestamp: moment().toISOString()
+    }
+    return this.decider.shouldSendPayment(paymentRequest)
+      .then(decision => {
+        if (decision === true) {
+          this.decider.recordPayment(paymentRequest)
+          // TODO get id from recordPayment in case we need to cancel it because it failed
+          const paymentParams = {
+            sourceAmount: sourceAmount,
+            destinationAccount: paymentRequest.destinationAccount,
+            destinationMemo: {
+              public_key: this.publicKey
+            },
+            sourceMemo: {
+              public_key: paymentRequest.publicKey
+            }
+          }
+          debug('About to send payment: %o', paymentParams)
+          this.emit('outgoing_payment', {
+            peerPublicKey: paymentRequest.publicKey,
+            amount: sourceAmount.toString()
+          })
+          this.walletClient.sendPayment(paymentParams)
+            .then(result => debug('Sent payment %o', result))
+            .catch(err => {
+              // If there was an error, subtract the amount from what we've paid them
+              // TODO make sure we actually didn't pay them anything
+              debug('Error sending payment %o', err)
+              this.decider.recordFailedPayment(paymentParams, err)
+            })
+        } else {
+          debug('Decider told us not to fulfill request %o', paymentRequest)
         }
-      }
-      debug('About to send payment: %o', paymentParams)
-      this.emit('outgoing_payment', {
-        peerPublicKey: peerPublicKey,
-        amount: sourceAmount.toString()
       })
-      this.walletClient.sendPayment(paymentParams)
-        .then(result => {
-          debug('Sent payment', result)
-        })
-        .catch(err => {
-          // If there was an error, subtract the amount from what we've paid them
-          // TODO make sure we actually didn't pay them anything
-          this.peersTotalSent[peerPublicKey] = this.peersTotalSent[peerPublicKey].minus(sourceAmount)
-          torrent.totalCost = torrent.totalCost.minus(sourceAmount)
-          debug('Error sending payment', err.stack)
-        })
-    }
-  }
-
-  _calculateAmountToPay (wire, torrent) {
-    const peerPublicKey = wire.wt_ilp.peerPublicKey
-    // TODO make sure we're checking they're actually sending us pieces we want
-    if (!this.peersTotalSent[peerPublicKey]) {
-      this.peersTotalSent[peerPublicKey] = new BigNumber(0)
-    }
-    if (!torrent.spentPerPeer[peerPublicKey]) {
-      torrent.spentPerPeer[peerPublicKey] = new BigNumber(0)
-    }
-    if (!torrent.bytesDownloadedFromPeer[peerPublicKey]) {
-      torrent.bytesDownloadedFromPeer[peerPublicKey] = new BigNumber(0)
-    }
-
-    // Peer stats
-    const amountSpentOnPeer = torrent.spentPerPeer[peerPublicKey]
-    const bytesDownloadedFromPeer = torrent.bytesDownloadedFromPeer[peerPublicKey]
-    const peerDownloadSpeed = wire.downloadSpeed()
-    const peerCostPerByte = bytesDownloadedFromPeer ? amountSpentOnPeer.div(bytesDownloadedFromPeer) : null
-
-    // Torrent stats
-    const torrentAverageDownloadSpeed = torrent.downloadSpeed
-    const torrentPeers = torrent.numPeers
-    const torrentProgress = torrent.progress
-    const torrentBytesRemaining = new BigNumber(torrent.length - torrent.downloaded)
-
-    // If we've paid them and they haven't sent us anything, don't pay any more
-    if (bytesDownloadedFromPeer === 0 && amountSpentOnPeer.greaterThan(0)) {
-      debug('not sending any more money until we get more data from the seeder (' + peerPublicKey.slice(0,8) + ')')
-      return new BigNumber(0)
-    }
-
-    // Calculate how much to pay this peer
-    const bytesToPayAveragePeerFor = BigNumber.min(
-      torrentBytesRemaining.div(torrentPeers),
-      100000)
-    // We trust this peer to send us at least some fraction of what they've already sent us
-    // TODO take into account how much we've ever downloaded from this peer (not just from this torrent)
-    const bytesToTrustPeerFor = BigNumber.min(
-      bytesDownloadedFromPeer.times(0.75),
-      torrentBytesRemaining)
-    const bytesToPayPeerFor = BigNumber.max(
-      bytesToPayAveragePeerFor,
-      bytesToTrustPeerFor)
-    // TODO get precision and scale from the ledger
-    const minLedgerAmount = 0.0002
-    // TODO make sure we don't overpay for a torrent when downloading from multiple peers
-    const amountToPayPeer = BigNumber.max(
-      this.price.times(bytesToPayPeerFor),
-      minLedgerAmount)
-
-    // TODO take into account the peer price and download speed when determining how much to send them
-
-    debug('calculating amount to pay peer:')
-    debug('bytes downloaded: ' + bytesDownloadedFromPeer)
-    debug('download speed: ' + peerDownloadSpeed)
-    debug('amount spent: ' + amountSpentOnPeer)
-    debug('peer costPerByte: ' + peerCostPerByte)
-    debug('torrentAverageDownloadSpeed: ' + torrentAverageDownloadSpeed)
-    debug('torrentPeers: ' + torrentPeers)
-    debug('torrentProgress: ' + torrentProgress)
-    debug('torrent length: ' + torrent.length)
-    debug('torrentBytesRemaining: ' + torrentBytesRemaining)
-    debug('bytesToPayPeerFor: ' + bytesToPayPeerFor)
-    debug('amountToPayPeer: ' + amountToPayPeer)
-
-    return amountToPayPeer
   }
 
   _handleIncomingPayment (credit) {
