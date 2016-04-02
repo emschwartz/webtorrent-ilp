@@ -8,6 +8,7 @@ import WalletClient from './walletClient'
 import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
 import Decider from './decider'
+import uuid from 'uuid'
 
 export default class WebTorrentIlp extends WebTorrent {
   constructor (opts) {
@@ -170,8 +171,12 @@ export default class WebTorrentIlp extends WebTorrent {
     // Send payment
     .then(({ decision, paymentRequest }) => {
       if (decision === true) {
-        this.decider.recordPayment(paymentRequest)
-        // TODO get id from recordPayment in case we need to cancel it because it failed
+        const paymentId = uuid.v4()
+        // TODO we should probably wait until this promise resolves
+        this.decider.recordPayment({
+          ...paymentRequest,
+          paymentId
+        })
         const paymentParams = {
           sourceAmount: paymentRequest.sourceAmount,
           destinationAccount: paymentRequest.destinationAccount,
@@ -193,7 +198,7 @@ export default class WebTorrentIlp extends WebTorrent {
             // If there was an error, subtract the amount from what we've paid them
             // TODO make sure we actually didn't pay them anything
             debug('Error sending payment %o', err)
-            this.decider.recordFailedPayment(paymentParams, err)
+            this.decider.recordFailedPayment(paymentId, err)
           })
       } else {
         debug('Decider told us not to fulfill request %o', paymentRequest)

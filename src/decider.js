@@ -56,10 +56,9 @@ export default class Decider {
     return Promise.resolve(this.Payment.inject(payment))
   }
 
-  recordFailedPayment (payment, err) {
-    debug('recordFailedPayment %o Error: %o', payment, err)
-    // TODO remove payment (note that this means we need to use a deterministic id or use a search)
-    return Promise.resolve()
+  recordFailedPayment (paymentId, err) {
+    debug('recordFailedPayment %o Error: %o', paymentId, err)
+    return Promise.resolve(this.Payment.eject(paymentId))
   }
 
   recordDelivery (delivery) {
