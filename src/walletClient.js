@@ -2,7 +2,7 @@
 
 import socket from 'socket.io-client'
 import { EventEmitter } from 'events'
-import sendPayment from 'five-bells-sender'
+import sendPayment, { findPath } from 'five-bells-sender'
 import request from 'superagent'
 import WebFinger from 'webfinger.js'
 import Debug from 'debug'
@@ -62,18 +62,45 @@ export default class WalletClient extends EventEmitter {
     this.socket.emit('unsubscribe', this.username)
   }
 
+  normalizeAmount (params) {
+    // TODO cache rate so we don't have to do a pathfind every time
+    return findPath({
+      ...params,
+      sourceAccount: this.account
+    })
+    .then((path) => {
+      if (Array.isArray(path) && path.length > 0) {
+        // TODO update this for the latest sender
+        const firstPayment = path[0]
+        const sourceAmount = firstPayment.source_transfers[0].debits[0].amount
+        debug(params.destinationAmount + ' on ' + path[path.length - 1].destination_transfers[0].ledger +
+          ' is equivalent to ' + sourceAmount + ' on ' + firstPayment.source_transfers[0].ledger)
+        return sourceAmount
+      } else {
+        throw new Error('No path found %o', path)
+      }
+    })
+    .catch((err) => {
+      debug('Error finding path %o %o', params, err)
+      throw err
+    })
+  }
+
   sendPayment (params) {
-    params.sourceAccount = this.account
-    params.sourcePassword = this.password
-    debug('sendPayment', params)
+    const paramsToSend = {
+      ...params,
+      sourceAccount: this.account,
+      sourcePassword: this.password
+    }
+    debug('sendPayment', paramsToSend)
     if (this.ready) {
-      return sendPayment(params)
+      return sendPayment(paramsToSend)
     } else {
       return new Promise((resolve, reject) => {
         this.once('ready', resolve)
       })
         .then(() => {
-          return sendPayment(params)
+          return sendPayment(paramsToSend)
         })
     }
   }

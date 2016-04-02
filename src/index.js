@@ -143,49 +143,60 @@ export default class WebTorrentIlp extends WebTorrent {
     }
   }
 
-  _payPeer (wire, torrent, requestedAmount) {
-    // TODO @tomorrow Do pathfinding to normalize amount first
-    const sourceAmount = requestedAmount // this.walletClient.getSourceAmount(requestedAmount)
-    const paymentRequest = {
-      sourceAmount: requestedAmount,
-      publicKey: wire.wt_ilp.peerPublicKey,
-      destinationAccount: wire.wt_ilp.peerAccount,
-      torrentHash: torrent.infoHash,
-      torrentBytesRemaining: torrent.length - torrent.downloaded,
-      timestamp: moment().toISOString()
-    }
-    return this.decider.shouldSendPayment(paymentRequest)
-      .then((decision) => {
-        if (decision === true) {
-          this.decider.recordPayment(paymentRequest)
-          // TODO get id from recordPayment in case we need to cancel it because it failed
-          const paymentParams = {
-            sourceAmount: sourceAmount,
-            destinationAccount: paymentRequest.destinationAccount,
-            destinationMemo: {
-              public_key: this.publicKey
-            },
-            sourceMemo: {
-              public_key: paymentRequest.publicKey
-            }
+  _payPeer (wire, torrent, destinationAmount) {
+    const destinationAccount = wire.wt_ilp.peerAccount
+    // Convert the destinationAmount into the sourceAmount
+    return this.walletClient.normalizeAmount({
+      destinationAccount,
+      destinationAmount
+    })
+    // Decide if we should pay
+    .then((sourceAmount) => {
+      const paymentRequest = {
+        sourceAmount,
+        destinationAccount,
+        publicKey: wire.wt_ilp.peerPublicKey,
+        torrentHash: torrent.infoHash,
+        torrentBytesRemaining: torrent.length - torrent.downloaded,
+        timestamp: moment().toISOString()
+      }
+      return this.decider.shouldSendPayment(paymentRequest)
+        .then((decision) => {
+          return { decision, paymentRequest }
+        })
+    })
+    // Send payment
+    .then(({ decision, paymentRequest }) => {
+      if (decision === true) {
+        this.decider.recordPayment(paymentRequest)
+        // TODO get id from recordPayment in case we need to cancel it because it failed
+        const paymentParams = {
+          sourceAmount: paymentRequest.sourceAmount,
+          destinationAccount: paymentRequest.destinationAccount,
+          destinationMemo: {
+            public_key: this.publicKey
+          },
+          sourceMemo: {
+            public_key: paymentRequest.publicKey
           }
-          debug('About to send payment: %o', paymentParams)
-          this.emit('outgoing_payment', {
-            peerPublicKey: paymentRequest.publicKey,
-            amount: sourceAmount.toString()
-          })
-          this.walletClient.sendPayment(paymentParams)
-            .then((result) => debug('Sent payment %o', result))
-            .catch((err) => {
-              // If there was an error, subtract the amount from what we've paid them
-              // TODO make sure we actually didn't pay them anything
-              debug('Error sending payment %o', err)
-              this.decider.recordFailedPayment(paymentParams, err)
-            })
-        } else {
-          debug('Decider told us not to fulfill request %o', paymentRequest)
         }
-      })
+        debug('About to send payment: %o', paymentParams)
+        this.emit('outgoing_payment', {
+          peerPublicKey: paymentRequest.publicKey,
+          amount: paymentRequest.sourceAmount.toString()
+        })
+        this.walletClient.sendPayment(paymentParams)
+          .then((result) => debug('Sent payment %o', result))
+          .catch((err) => {
+            // If there was an error, subtract the amount from what we've paid them
+            // TODO make sure we actually didn't pay them anything
+            debug('Error sending payment %o', err)
+            this.decider.recordFailedPayment(paymentParams, err)
+          })
+      } else {
+        debug('Decider told us not to fulfill request %o', paymentRequest)
+      }
+    })
   }
 
   _handleIncomingPayment (credit) {
