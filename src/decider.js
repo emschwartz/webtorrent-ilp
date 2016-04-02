@@ -3,11 +3,13 @@ const debug = Debug('WebTorrentIlp:Decider')
 import JSData from 'js-data'
 import uuid from 'uuid'
 import BigNumber from 'bignumber.js'
+import moment from 'moment'
 
 export default class Decider {
   constructor (opts) {
     this.store = new JSData.DS()
     // TODO don't use uuids, maybe use incrementing numbers to reduce memory
+    // TODO use relations to avoid storing the publicKey and torrentHash many times over
     this.Payment = this.store.defineResource({
       name: 'payment',
       computed: {
@@ -29,18 +31,24 @@ export default class Decider {
   }
 
   shouldSendPayment (paymentRequest) {
+    const { publicKey, torrentHash } = paymentRequest
     return this.recordPaymentRequest(paymentRequest)
       .then(() => {
-        // TODO @tomorrow put checking logic here
-        const costPerByte = this.getCostPerByte({
-          publicKey: paymentRequest.publicKey,
-          torrentHash: paymentRequest.torrentHash
-        })
-        debug('checking if we shouldSendPayment, costPerByte: ' + costPerByte.toString())
+        debug('checking if we shouldSendPayment')
 
-        if (!costPerByte.isFinite()) {
+        const peerCostPerByte = this.getCostPerByte({ publicKey, torrentHash })
+        debug('peerCostPerByte: ' + peerCostPerByte.toString() + ' (' + publicKey.slice(0, 8) + ')')
+        if (!peerCostPerByte.isFinite()) {
           return false
         }
+        const torrentCostPerByte = this.getCostPerByte({ torrentHash })
+        debug('torrentCostPerByte: ' + torrentCostPerByte.toString())
+
+        // Check if there is a cheaper or faster peer
+        const peerSpeed = this.getSpeed({ publicKey, torrentHash, includeTimeToNow: true })
+        const torrentSpeed = this.getSpeed({ torrentHash, includeTimeToNow: true })
+        debug('peerSpeed: ' + peerSpeed.toString() + ' (' + publicKey.slice(0, 8) + ')')
+        debug('torrentSpeed: ' + torrentSpeed.toString())
 
         return true
       })
@@ -83,6 +91,32 @@ export default class Decider {
       return new BigNumber(0)
     }
     return totalSent.div(bytesDelivered)
+  }
+
+  getSpeed ({ publicKey, torrentHash, includeTimeToNow }) {
+    let query = {
+      where: {
+        torrentHash: {
+          '===': torrentHash
+        }
+      },
+      orderBy: [['timestamp', 'ASC']]
+    }
+    if (publicKey) {
+      query.where.publicKey = { '===': publicKey }
+    }
+    const deliveries = this.Delivery.filter(query)
+    if (!deliveries || deliveries.length === 0) {
+      return new BigNumber(0)
+    }
+    let timeSpan
+    if (includeTimeToNow) {
+      timeSpan = moment().diff(deliveries[0].timestamp)
+    } else {
+      timeSpan = moment(deliveries[deliveries.length - 1]).diff(deliveries[0].timestamp)
+    }
+    const bytesDelivered = sum(deliveries, 'bytes')
+    return bytesDelivered.div(timeSpan)
   }
 }
 
