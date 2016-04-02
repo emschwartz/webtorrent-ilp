@@ -140,6 +140,7 @@ export default class WebTorrentIlp extends WebTorrent {
       wire.wt_ilp.unchoke()
     } else {
       // TODO handle the min ledger amount more elegantly
+      // TODO add bidding agent to track how much peer is willing to send at a time
       const MIN_LEDGER_AMOUNT = '0.0001'
       wire.wt_ilp.sendPaymentRequest(BigNumber.max(amountToCharge, MIN_LEDGER_AMOUNT))
       wire.wt_ilp.forceChoke()

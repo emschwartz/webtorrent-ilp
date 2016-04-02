@@ -7,6 +7,10 @@ import request from 'superagent'
 import WebFinger from 'webfinger.js'
 import Debug from 'debug'
 const debug = Debug('WebTorrentIlp:WalletClient')
+import moment from 'moment'
+import BigNumber from 'bignumber.js'
+
+const RATE_CACHE_REFRESH = 60000
 
 /**
  * Client for connecting to the five-bells-wallet
@@ -27,6 +31,9 @@ export default class WalletClient extends EventEmitter {
 
     this.socket = null
     this.ready = false
+
+    // <destinationAccount>: { <destinationAmount>: { sourceAmount: 10, expiresAt: '<date>' } }
+    this.ratesCache = {}
   }
 
   connect () {
@@ -63,7 +70,22 @@ export default class WalletClient extends EventEmitter {
   }
 
   normalizeAmount (params) {
-    // TODO cache rate so we don't have to do a pathfind every time
+    // TODO clean up this caching system
+    const cacheRateThreshold = (new BigNumber(params.destinationAmount)).div(100)
+    if (this.ratesCache[params.destinationAccount]) {
+      const destinationAmounts = Object.keys(this.ratesCache[params.destinationAccount])
+      for (let destinationAmount of destinationAmounts) {
+        const cache = this.ratesCache[params.destinationAccount][destinationAmount]
+        if (cache.expiresAt.isBefore(moment())) {
+          delete this.ratesCache[params.destinationAccount][destinationAmount]
+          continue
+        }
+        if ((new BigNumber(destinationAmount)).minus(params.destinationAmount).abs().lessThan(cacheRateThreshold)) {
+          return Promise.resolve(cache.sourceAmount)
+        }
+      }
+    }
+
     return findPath({
       ...params,
       sourceAccount: this.account
@@ -75,6 +97,16 @@ export default class WalletClient extends EventEmitter {
         const sourceAmount = firstPayment.source_transfers[0].debits[0].amount
         debug(params.destinationAmount + ' on ' + path[path.length - 1].destination_transfers[0].ledger +
           ' is equivalent to ' + sourceAmount + ' on ' + firstPayment.source_transfers[0].ledger)
+
+        // TODO cache rate by ledger instead of by account
+        if (!this.ratesCache[params.destinationAccount]) {
+          this.ratesCache[params.destinationAccount] = {}
+        }
+        this.ratesCache[params.destinationAccount][params.destinationAmount] = {
+          sourceAmount: new BigNumber(sourceAmount),
+          expiresAt: moment().add(RATE_CACHE_REFRESH, 'milliseconds')
+        }
+
         return sourceAmount
       } else {
         throw new Error('No path found %o', path)
