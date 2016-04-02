@@ -102,7 +102,8 @@ export default class WebTorrentIlp extends WebTorrent {
         this.decider.recordDelivery({
           publicKey: wire.wt_ilp.peerPublicKey,
           torrentHash: torrent.infoHash,
-          bytes: bytes
+          bytes: bytes,
+          timestamp: moment().toISOString()
         })
       })
 
@@ -114,11 +115,9 @@ export default class WebTorrentIlp extends WebTorrent {
     })
 
     torrent.on('done', () => {
-      this.decider.getTotalSent({
+      debug('torrent total cost: ' + this.decider.getTotalSent({
         torrentHash: torrent.infoHash
-      }).then((amount) => {
-        debug('torrent total cost: ' + amount)
-      })
+      }))
     })
   }
 

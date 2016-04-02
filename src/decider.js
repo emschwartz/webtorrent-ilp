@@ -32,6 +32,16 @@ export default class Decider {
     return this.recordPaymentRequest(paymentRequest)
       .then(() => {
         // TODO @tomorrow put checking logic here
+        const costPerByte = this.getCostPerByte({
+          publicKey: paymentRequest.publicKey,
+          torrentHash: paymentRequest.torrentHash
+        })
+        debug('checking if we shouldSendPayment, costPerByte: ' + costPerByte.toString())
+
+        if (!costPerByte.isFinite()) {
+          return false
+        }
+
         return true
       })
   }
@@ -59,10 +69,28 @@ export default class Decider {
 
   getTotalSent (filters) {
     const payments = this.Payment.filter(filters)
-    let total = new BigNumber(0)
-    for (let payment of payments) {
-      total = total.plus(payment.sourceAmount)
-    }
-    return Promise.resolve(total)
+    return sum(payments, 'sourceAmount')
   }
+
+  getBytesDelivered (filters) {
+    const deliveries = this.Delivery.filter(filters)
+    return sum(deliveries, 'bytes')
+  }
+
+  getCostPerByte (filters) {
+    const totalSent = this.getTotalSent(filters)
+    const bytesDelivered = this.getBytesDelivered(filters)
+    if (totalSent.equals(0)) {
+      return new BigNumber(0)
+    }
+    return totalSent.div(bytesDelivered)
+  }
+}
+
+function sum (arr, key) {
+  let total = new BigNumber(0)
+  for (let item of arr) {
+    total = total.plus(item[key])
+  }
+  return total
 }
