@@ -4,7 +4,6 @@ import WebTorrent from 'webtorrent'
 import wt_ilp from 'wt_ilp'
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
-import sendPayment from 'five-bells-sender'
 import WalletClient from './walletClient'
 import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
@@ -117,7 +116,7 @@ export default class WebTorrentIlp extends WebTorrent {
     torrent.on('done', () => {
       this.decider.getTotalSent({
         torrentHash: torrent.infoHash
-      }).then(amount => {
+      }).then((amount) => {
         debug('torrent total cost: ' + amount)
       })
     })
@@ -134,7 +133,7 @@ export default class WebTorrentIlp extends WebTorrent {
     if (peerBalance.greaterThan(amountToCharge)) {
       const newBalance = peerBalance.minus(amountToCharge)
       this.peerBalances[wire.wt_ilp.peerPublicKey] = newBalance
-      debug('charging ' + amountToCharge.toString() + ' for request. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0,8) + ')')
+      debug('charging ' + amountToCharge.toString() + ' for request. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0, 8) + ')')
       torrent.totalEarned = torrent.totalEarned.plus(amountToCharge)
       wire.wt_ilp.unchoke()
     } else {
@@ -147,7 +146,7 @@ export default class WebTorrentIlp extends WebTorrent {
 
   _payPeer (wire, torrent, requestedAmount) {
     // TODO @tomorrow Do pathfinding to normalize amount first
-    const sourceAmount = requestedAmount //this.walletClient.getSourceAmount(requestedAmount)
+    const sourceAmount = requestedAmount // this.walletClient.getSourceAmount(requestedAmount)
     const paymentRequest = {
       sourceAmount: requestedAmount,
       publicKey: wire.wt_ilp.peerPublicKey,
@@ -157,7 +156,7 @@ export default class WebTorrentIlp extends WebTorrent {
       timestamp: moment().toISOString()
     }
     return this.decider.shouldSendPayment(paymentRequest)
-      .then(decision => {
+      .then((decision) => {
         if (decision === true) {
           this.decider.recordPayment(paymentRequest)
           // TODO get id from recordPayment in case we need to cancel it because it failed
@@ -177,8 +176,8 @@ export default class WebTorrentIlp extends WebTorrent {
             amount: sourceAmount.toString()
           })
           this.walletClient.sendPayment(paymentParams)
-            .then(result => debug('Sent payment %o', result))
-            .catch(err => {
+            .then((result) => debug('Sent payment %o', result))
+            .catch((err) => {
               // If there was an error, subtract the amount from what we've paid them
               // TODO make sure we actually didn't pay them anything
               debug('Error sending payment %o', err)
@@ -198,7 +197,7 @@ export default class WebTorrentIlp extends WebTorrent {
       }
       const previousBalance = this.peerBalances[peerPublicKey] || new BigNumber(0)
       const newBalance = previousBalance.plus(credit.amount)
-      debug('crediting peer for payment of: ' + credit.amount + '. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0,8) + ')')
+      debug('crediting peer for payment of: ' + credit.amount + '. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0, 8) + ')')
       this.peerBalances[peerPublicKey] = newBalance
       this.emit('incoming_payment', {
         peerPublicKey: peerPublicKey,

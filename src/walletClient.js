@@ -32,7 +32,7 @@ export default class WalletClient extends EventEmitter {
   connect () {
     debug('Account address:', this.address)
     return WalletClient.webfingerAddress(this.address)
-      .then(account => {
+      .then((account) => {
         this.account = account
 
         debug('Attempting to connect to wallet: ' + this.walletUri + '/api/socket.io')
@@ -48,12 +48,12 @@ export default class WalletClient extends EventEmitter {
           this.ready = false
           debug('Disconnected from wallet')
         })
-        this.socket.on('connect_error', err => {
+        this.socket.on('connect_error', (err) => {
           debug('Connection error', err, err.stack)
         })
         this.socket.on('payment', this._handleNotification.bind(this))
       })
-      .catch(err => {
+      .catch((err) => {
         debug(err)
       })
   }
@@ -72,9 +72,9 @@ export default class WalletClient extends EventEmitter {
       return new Promise((resolve, reject) => {
         this.once('ready', resolve)
       })
-      .then(() => {
-        return sendPayment(params)
-      })
+        .then(() => {
+          return sendPayment(params)
+        })
     }
   }
 
