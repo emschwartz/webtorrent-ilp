@@ -21,7 +21,7 @@ export default class WebTorrentIlp extends WebTorrent {
     this.publicKey = opts.publicKey
 
     this.startingBid = opts.startingBid || this.price.times(100)
-    this.bidDecreaseFactor = opts.bidDecreaseFactor || 0.9
+    this.bidDecreaseFactor = opts.bidDecreaseFactor || 0.95
     this.bidIncreaseFactor = opts.bidIncreaseFactor || 1.5
 
     this.decider = new Decider()

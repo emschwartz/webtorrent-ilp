@@ -50,6 +50,13 @@ export default class Decider {
         debug('peerSpeed: ' + peerSpeed.toString() + ' (' + publicKey.slice(0, 8) + ')')
         debug('torrentSpeed: ' + torrentSpeed.toString())
 
+        const numPaymentsInLastTenSeconds = this.getNumPaymentsSinceDate({ publicKey, torrentHash, date: moment().subtract(10, 'seconds') })
+        debug('numPaymentsInLastTenSeconds: ' + numPaymentsInLastTenSeconds.toString())
+        const maxPaymentsPerTenSeconds = 2
+        if (numPaymentsInLastTenSeconds.greaterThan(maxPaymentsPerTenSeconds)) {
+          return false
+        }
+
         // TODO @tomorrow create models for the peers that automatically track their speed and cost
 
         return true
@@ -119,6 +126,23 @@ export default class Decider {
     }
     const bytesDelivered = sum(deliveries, 'bytes')
     return bytesDelivered.div(timeSpan)
+  }
+
+  getNumPaymentsSinceDate ({ publicKey, torrentHash, date }) {
+    let query = {
+      where: {}
+    }
+    if (publicKey) {
+      query.where.publicKey = { '===': publicKey }
+    }
+    if (torrentHash) {
+      query.where.torrentHash = { '===': torrentHash }
+    }
+    if (date) {
+      query.where.timestamp = { '>=': date.toString() }
+    }
+    const payments = this.Payment.filter(query)
+    return payments.length
   }
 }
 
