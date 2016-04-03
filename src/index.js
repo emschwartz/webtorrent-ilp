@@ -19,6 +19,10 @@ export default class WebTorrentIlp extends WebTorrent {
     this.price = new BigNumber(opts.price) // price per byte
     this.publicKey = opts.publicKey
 
+    this.startingBid = opts.startingBid || this.price.times(100000)
+    this.bidDecreaseFactor = opts.bidDecreaseFactor || 0.9
+    this.bidIncreaseFactor = opts.bidIncreaseFactor || 1.5
+
     this.decider = new Decider()
 
     this.walletClient = new WalletClient({
@@ -50,8 +54,12 @@ export default class WebTorrentIlp extends WebTorrent {
     const oldFn = this[fnName]
     this[fnName] = function () {
       const torrent = oldFn.apply(_this, arguments)
-      for (let fn of functionsToCall) {
-        fn(torrent)
+      // Make sure we don't set up the torrent twice
+      if (!torrent.__setupWithIlp) {
+        for (let fn of functionsToCall) {
+          fn(torrent)
+        }
+        torrent.__setupWithIlp = true
       }
       return torrent
     }
@@ -75,53 +83,64 @@ export default class WebTorrentIlp extends WebTorrent {
     }
   }
 
+  _onWire (torrent, wire) {
+    wire.bidAmount = this.price.times(this.startingBid)
+    debug('starting bid amount: ' + wire.bidAmount.toString())
+
+    wire.use(wt_ilp({
+      account: this.walletClient.account,
+      price: this.price,
+      publicKey: this.publicKey
+    }))
+    wire.wt_ilp.on('ilp_handshake', (handshake) => {
+      debug('Got extended handshake', handshake)
+      // wire.wt_ilp.unchoke()
+      if (!this.peerWires[handshake.publicKey]) {
+        this.peerWires[handshake.publicKey] = []
+      }
+      this.peerWires[handshake.publicKey].push(wire)
+    })
+
+    // Charge peers for requesting data from us
+    wire.wt_ilp.on('request', this._chargePeerForRequest.bind(this, wire, torrent))
+    wire.wt_ilp.on('payment_request_too_high', (amount) => {
+      debug('Got payment_request_too_high' + (amount ? ' ' + amount : ''))
+      wire.bidAmount = wire.bidAmount.times(this.bidDecreaseFactor)
+    })
+
+    // Pay peers who we are downloading from
+    wire.wt_ilp.on('payment_request', this._payPeer.bind(this, wire, torrent))
+
+    wire.on('download', (bytes) => {
+      debug('downloaded ' + bytes + ' bytes (' + wire.wt_ilp.peerPublicKey.slice(0, 8) + ')')
+      this.decider.recordDelivery({
+        publicKey: wire.wt_ilp.peerPublicKey,
+        torrentHash: torrent.infoHash,
+        bytes: bytes,
+        timestamp: moment().toISOString()
+      })
+    })
+
+    wire.wt_ilp.on('warning', (err) => {
+      debug('Error', err)
+    })
+
+    wire.wt_ilp.forceChoke()
+  }
+
   _setupWtIlp (torrent) {
     torrent.totalEarned = new BigNumber(0)
 
-    torrent.on('wire', (wire) => {
-      wire.use(wt_ilp({
-        account: this.walletClient.account,
-        price: this.price,
-        publicKey: this.publicKey
-      }))
-      wire.wt_ilp.on('ilp_handshake', (handshake) => {
-        debug('Got extended handshake', handshake)
-        // wire.wt_ilp.unchoke()
-        if (!this.peerWires[handshake.publicKey]) {
-          this.peerWires[handshake.publicKey] = []
-        }
-        this.peerWires[handshake.publicKey].push(wire)
-      })
-
-      // Charge peers for requesting data from us
-      wire.wt_ilp.on('request', this._chargePeerForRequest.bind(this, wire, torrent))
-      wire.wt_ilp.on('payment_request_too_high', (amount) => {
-        debug('Got payment_request_too_high' + (amount ? ' ' + amount : ''))
-      })
-
-      // Pay peers who we are downloading from
-      wire.wt_ilp.on('payment_request', this._payPeer.bind(this, wire, torrent))
-
-      wire.on('download', (bytes) => {
-        this.decider.recordDelivery({
-          publicKey: wire.wt_ilp.peerPublicKey,
-          torrentHash: torrent.infoHash,
-          bytes: bytes,
-          timestamp: moment().toISOString()
-        })
-      })
-
-      wire.wt_ilp.on('warning', (err) => {
-        debug('Error', err)
-      })
-
-      wire.wt_ilp.forceChoke()
-    })
+    torrent.on('wire', this._onWire.bind(this, torrent))
 
     torrent.on('done', () => {
       debug('torrent total cost: ' + this.decider.getTotalSent({
         torrentHash: torrent.infoHash
       }))
+    })
+
+    torrent.on('error', (err) => {
+      debug('torrent error:', err)
     })
   }
 
@@ -139,15 +158,24 @@ export default class WebTorrentIlp extends WebTorrent {
       torrent.totalEarned = torrent.totalEarned.plus(amountToCharge)
       wire.wt_ilp.unchoke()
     } else {
+      // TODO @tomorrow add bidding agent to track how much peer is willing to send at a time
+
+      // If the amount we request up front is too low, the peer will send us money
+      // then we won't do anything because it'll be less than the amountToCharge
+      // and then they'll never send us anything again
+      if (!wire.bidAmount || amountToCharge.greaterThan(wire.bidAmount)) {
+        wire.bidAmount = amountToCharge
+      }
+
       // TODO handle the min ledger amount more elegantly
-      // TODO add bidding agent to track how much peer is willing to send at a time
       const MIN_LEDGER_AMOUNT = '0.0001'
-      wire.wt_ilp.sendPaymentRequest(BigNumber.max(amountToCharge, MIN_LEDGER_AMOUNT))
+      wire.wt_ilp.sendPaymentRequest(BigNumber.max(wire.bidAmount, MIN_LEDGER_AMOUNT))
       wire.wt_ilp.forceChoke()
     }
   }
 
   _payPeer (wire, torrent, destinationAmount) {
+    const _this = this
     const destinationAccount = wire.wt_ilp.peerAccount
     // Convert the destinationAmount into the sourceAmount
     return this.walletClient.normalizeAmount({
@@ -164,7 +192,7 @@ export default class WebTorrentIlp extends WebTorrent {
         torrentBytesRemaining: torrent.length - torrent.downloaded,
         timestamp: moment().toISOString()
       }
-      return this.decider.shouldSendPayment(paymentRequest)
+      return _this.decider.shouldSendPayment(paymentRequest)
         .then((decision) => {
           return { decision, paymentRequest }
         })
@@ -174,7 +202,7 @@ export default class WebTorrentIlp extends WebTorrent {
       if (decision === true) {
         const paymentId = uuid.v4()
         // TODO we should probably wait until this promise resolves
-        this.decider.recordPayment({
+        _this.decider.recordPayment({
           ...paymentRequest,
           paymentId
         })
@@ -182,24 +210,24 @@ export default class WebTorrentIlp extends WebTorrent {
           sourceAmount: paymentRequest.sourceAmount,
           destinationAccount: paymentRequest.destinationAccount,
           destinationMemo: {
-            public_key: this.publicKey
+            public_key: _this.publicKey
           },
           sourceMemo: {
             public_key: paymentRequest.publicKey
           }
         }
         debug('About to send payment: %o', paymentParams)
-        this.emit('outgoing_payment', {
+        _this.emit('outgoing_payment', {
           peerPublicKey: paymentRequest.publicKey,
           amount: paymentRequest.sourceAmount.toString()
         })
-        this.walletClient.sendPayment(paymentParams)
+        _this.walletClient.sendPayment(paymentParams)
           .then((result) => debug('Sent payment %o', result))
           .catch((err) => {
             // If there was an error, subtract the amount from what we've paid them
             // TODO make sure we actually didn't pay them anything
             debug('Error sending payment %o', err)
-            this.decider.recordFailedPayment(paymentId, err)
+            _this.decider.recordFailedPayment(paymentId, err)
           })
       } else {
         debug('Decider told us not to fulfill request %o', paymentRequest)
@@ -225,6 +253,7 @@ export default class WebTorrentIlp extends WebTorrent {
       // Unchoke all of this peer's wires
       for (let wire of this.peerWires[peerPublicKey]) {
         wire.unchoke()
+        wire.bidAmount = wire.bidAmount.times(this.bidIncreaseFactor)
       }
     }
   }

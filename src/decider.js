@@ -50,6 +50,8 @@ export default class Decider {
         debug('peerSpeed: ' + peerSpeed.toString() + ' (' + publicKey.slice(0, 8) + ')')
         debug('torrentSpeed: ' + torrentSpeed.toString())
 
+        // TODO @tomorrow create models for the peers that automatically track their speed and cost
+
         return true
       })
   }
