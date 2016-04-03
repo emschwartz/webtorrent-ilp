@@ -16,10 +16,11 @@ export default class WebTorrentIlp extends WebTorrent {
 
     this.address = opts.address
     this.password = opts.password
-    this.price = new BigNumber(opts.price) // price per byte
+    this.price = new BigNumber(opts.price) // price per kb
+    debug('set price per kb: ' + this.price.toString())
     this.publicKey = opts.publicKey
 
-    this.startingBid = opts.startingBid || this.price.times(100000)
+    this.startingBid = opts.startingBid || this.price.times(100)
     this.bidDecreaseFactor = opts.bidDecreaseFactor || 0.9
     this.bidIncreaseFactor = opts.bidIncreaseFactor || 1.5
 
@@ -149,7 +150,7 @@ export default class WebTorrentIlp extends WebTorrent {
     const peerBalance = this.peerBalances[peerPublicKey] || new BigNumber(0)
 
     // TODO get smarter about how we price the amount (maybe based on torrent rarity?)
-    const amountToCharge = this.price.times(bytesRequested)
+    const amountToCharge = this.price.times(bytesRequested / 1000)
 
     if (peerBalance.greaterThan(amountToCharge)) {
       const newBalance = peerBalance.minus(amountToCharge)
