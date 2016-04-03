@@ -1,6 +1,5 @@
 'use strict'
 
-import WebTorrent from 'webtorrent'
 import wt_ilp from 'wt_ilp'
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
@@ -9,6 +8,16 @@ import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
 import Decider from './decider'
 import uuid from 'uuid'
+
+// Overwrite the WebTorrent dependencies with ones that include the license
+import createTorrent from 'create-torrent'
+import requireInTheMiddle from 'require-in-the-middle'
+requireInTheMiddle(['create-torrent'], function (exports, name, basedir) {
+  if (name === 'create-torrent') {
+    return createTorrent
+  }
+})
+const WebTorrent = require('webtorrent')
 
 export default class WebTorrentIlp extends WebTorrent {
   constructor (opts) {
