@@ -1,139 +1,194 @@
 'use strict'
 
-const socket = require('socket.io-client')
-const EventEmitter = require('events').EventEmitter
-const inherits = require('inherits')
-const sendPayment = require('five-bells-sender')
-const request = require('superagent')
-const WebFinger = require('webfinger.js')
-const debug = require('debug')('WebTorrentIlp:WalletClient')
+import socket from 'socket.io-client'
+import { EventEmitter } from 'events'
+import sendPayment, { findPath } from 'five-bells-sender'
+import request from 'superagent'
+import WebFinger from 'webfinger.js'
+import Debug from 'debug'
+const debug = Debug('WebTorrentIlp:WalletClient')
+import moment from 'moment'
+import BigNumber from 'bignumber.js'
+
+const RATE_CACHE_REFRESH = 60000
 
 /**
  * Client for connecting to the five-bells-wallet
  * @param {String} opts.address
  * @param {String} opts.password
  */
-function WalletClient (opts) {
-  EventEmitter.call(this)
+export default class WalletClient extends EventEmitter {
+  constructor (opts) {
+    super()
 
-  this.address = opts.address
-  this.password = opts.password
-  this.account = null
+    this.address = opts.address
+    this.password = opts.password
+    this.account = null
 
-  // TODO these should be removed once the wallet returns the right values from webfinger
-  this.walletUri = 'https://' + opts.address.split('@')[1]
-  this.username = opts.address.split('@')[0]
+    // TODO these should be removed once the wallet returns the right values from webfinger
+    this.walletUri = 'https://' + opts.address.split('@')[1]
+    this.username = opts.address.split('@')[0]
 
-  this.socket = null
-  this.ready = false
-}
+    this.socket = null
+    this.ready = false
 
-inherits(WalletClient, EventEmitter)
+    // <destinationAccount>: { <destinationAmount>: { sourceAmount: 10, expiresAt: '<date>' } }
+    this.ratesCache = {}
+  }
 
-WalletClient.prototype.connect = function () {
-  const _this = this
+  connect () {
+    debug('Account address:', this.address)
+    return WalletClient.webfingerAddress(this.address)
+      .then((account) => {
+        this.account = account
 
-  debug('Account address:', this.address)
-  return webfingerAddress(this.address)
-    .then(function (account) {
-      _this.account = account
-
-      debug('Attempting to connect to wallet: ' + _this.walletUri + '/api/socket.io')
-      _this.socket = socket(_this.walletUri, { path: '/api/socket.io' })
-      _this.socket.on('connect', function () {
-        debug('Connected to wallet API socket.io')
-        _this.ready = true
-        _this.emit('ready')
-        _this.socket.emit('unsubscribe', _this.username)
-        _this.socket.emit('subscribe', _this.username)
+        debug('Attempting to connect to wallet: ' + this.walletUri + '/api/socket.io')
+        this.socket = socket(this.walletUri, { path: '/api/socket.io' })
+        this.socket.on('connect', () => {
+          debug('Connected to wallet API socket.io')
+          this.ready = true
+          this.emit('ready')
+          this.socket.emit('unsubscribe', this.username)
+          this.socket.emit('subscribe', this.username)
+        })
+        this.socket.on('disconnect', () => {
+          this.ready = false
+          debug('Disconnected from wallet')
+        })
+        this.socket.on('connect_error', (err) => {
+          debug('Connection error', err, err.stack)
+        })
+        this.socket.on('payment', this._handleNotification.bind(this))
       })
-      _this.socket.on('disconnect', function () {
-        _this.ready = false
-        debug('Disconnected from wallet')
+      .catch((err) => {
+        debug(err)
       })
-      _this.socket.on('connect_error', function (err) {
-        debug('Connection error', err, err.stack)
-      })
-      _this.socket.on('payment', _this._handleNotification.bind(_this))
-    })
-    .catch(function (err) {
-      debug(err)
-    })
-}
+  }
 
-WalletClient.prototype.disconnect = function () {
-  this.socket.emit('unsubscribe', this.username)
-}
+  disconnect () {
+    this.socket.emit('unsubscribe', this.username)
+  }
 
-WalletClient.prototype.sendPayment = function (params) {
-  params.sourceAccount = this.account
-  params.sourcePassword = this.password
-  debug('sendPayment', params)
-  if (this.ready) {
-    return sendPayment(params)
-  } else {
-    return new Promise(function (resolve, reject) {
-      this.once('ready', resolve)
+  normalizeAmount (params) {
+    // TODO clean up this caching system
+    const cacheRateThreshold = (new BigNumber(params.destinationAmount)).div(100)
+    if (this.ratesCache[params.destinationAccount]) {
+      const destinationAmounts = Object.keys(this.ratesCache[params.destinationAccount])
+      for (let destinationAmount of destinationAmounts) {
+        const cache = this.ratesCache[params.destinationAccount][destinationAmount]
+        if (cache.expiresAt.isBefore(moment())) {
+          delete this.ratesCache[params.destinationAccount][destinationAmount]
+          continue
+        }
+        if ((new BigNumber(destinationAmount)).minus(params.destinationAmount).abs().lessThan(cacheRateThreshold)) {
+          return Promise.resolve(cache.sourceAmount)
+        }
+      }
+    }
+
+    return findPath({
+      ...params,
+      sourceAccount: this.account
     })
-    .then(function () {
-      return sendPayment(params)
+    .then((path) => {
+      if (Array.isArray(path) && path.length > 0) {
+        // TODO update this for the latest sender
+        const firstPayment = path[0]
+        const sourceAmount = firstPayment.source_transfers[0].debits[0].amount
+        debug(params.destinationAmount + ' on ' + path[path.length - 1].destination_transfers[0].ledger +
+          ' is equivalent to ' + sourceAmount + ' on ' + firstPayment.source_transfers[0].ledger)
+
+        // TODO cache rate by ledger instead of by account
+        if (!this.ratesCache[params.destinationAccount]) {
+          this.ratesCache[params.destinationAccount] = {}
+        }
+        this.ratesCache[params.destinationAccount][params.destinationAmount] = {
+          sourceAmount: new BigNumber(sourceAmount),
+          expiresAt: moment().add(RATE_CACHE_REFRESH, 'milliseconds')
+        }
+
+        return sourceAmount
+      } else {
+        throw new Error('No path found %o', path)
+      }
+    })
+    .catch((err) => {
+      debug('Error finding path %o %o', params, err)
+      throw err
     })
   }
-}
 
-WalletClient.prototype._handleNotification = function (payment) {
-  const _this = this
-  if (payment.transfers) {
-    debug('got notification of transfer' + payment.transfers)
-    request.get(payment.transfers)
-      .end(function (err, res) {
+  sendPayment (params) {
+    const paramsToSend = {
+      ...params,
+      sourceAccount: this.account,
+      sourcePassword: this.password
+    }
+    debug('sendPayment', paramsToSend)
+    if (this.ready) {
+      return sendPayment(paramsToSend)
+    } else {
+      return new Promise((resolve, reject) => {
+        this.once('ready', resolve)
+      })
+        .then(() => {
+          return sendPayment(paramsToSend)
+        })
+    }
+  }
+
+  _handleNotification (payment) {
+    if (payment.transfers) {
+      request.get(payment.transfers)
+        .end((err, res) => {
+          if (err) {
+            debug('Error getting transfer', err)
+            return
+          }
+          const transfer = res.body
+          debug('got notification of transfer ' + payment.transfers, transfer)
+          if (transfer.state === 'executed') {
+            // Look for incoming credits or outgoing debits involving us
+            for (let credit of transfer.credits) {
+              if (credit.account === this.account) {
+                this.emit('incoming', credit)
+              }
+            }
+          }
+          if (transfer.state === 'rejected') {
+            // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
+            for (let debit of transfer.debits) {
+              if (debit.account === this.account) {
+                this.emit('outgoing_rejected', debit)
+              }
+            }
+          }
+        })
+    }
+  }
+
+  // Returns a promise that resolves to the account details
+  static webfingerAddress (address) {
+    const WebFingerConstructor = (window && typeof WebFinger !== 'function' ? window.WebFinger : WebFinger)
+    const webfinger = new WebFingerConstructor()
+    return new Promise((resolve, reject) => {
+      webfinger.lookup(address, (err, res) => {
         if (err) {
-          debug('Error getting transfer', err)
-          return
+          return reject(new Error('Error looking up wallet address: ' + err.message))
         }
-        const transfer = res.body
-        if (transfer.state === 'executed') {
-          // Look for incoming credits or outgoing debits involving us
-          for (let credit of transfer.credits) {
-            if (credit.account === _this.account) {
-              _this.emit('incoming', credit)
+
+        try {
+          for (let link of res.object.links) {
+            if (link.rel === 'http://webfinger.net/rel/ledgerAccount') {
+              // TODO also get the wallet API endpoint
+              return resolve(link.href)
             }
           }
-        }
-        if (transfer.state === 'rejected') {
-          // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
-          for (let debit of transfer.debits) {
-            if (debit.account === _this.account) {
-              _this.emit('outgoing_rejected', debit)
-            }
-          }
+          return reject(new Error('Error parsing webfinger response' + JSON.stringify(res)))
+        } catch (err) {
+          return reject(new Error('Error parsing webfinger response' + err.message))
         }
       })
+    })
   }
 }
-
-// Returns a promise that resolves to the account details
-function webfingerAddress (address) {
-  const webfinger = new WebFinger()
-  return new Promise(function (resolve, reject) {
-    webfinger.lookup(address, function (err, res) {
-      if (err) {
-        return reject(new Error('Error looking up wallet address: ' + err.message))
-      }
-
-      try {
-        for (let link of res.object.links) {
-          if (link.rel === 'http://webfinger.net/rel/ledgerAccount') {
-            // TODO also get the wallet API endpoint
-            return resolve(link.href)
-          }
-        }
-        return reject(new Error('Error parsing webfinger response' + JSON.stringify(res)))
-      } catch (err) {
-        return reject(new Error('Error parsing webfinger response' + err.message))
-      }
-    })
-  })
-}
-
-exports.WalletClient = WalletClient
