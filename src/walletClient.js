@@ -171,7 +171,7 @@ export default class WalletClient extends EventEmitter {
 
   // Returns a promise that resolves to the account details
   static webfingerAddress (address) {
-    const WebFingerConstructor = WebFinger || window.WebFinger
+    const WebFingerConstructor = (typeof window === 'object' && window.WebFinger ? window.WebFinger : WebFinger)
     const webfinger = new WebFingerConstructor()
     return new Promise((resolve, reject) => {
       webfinger.lookup(address, (err, res) => {
