@@ -28,7 +28,7 @@
     "superagent": "^1.8.1",
     "uuid": "^2.0.1",
     "webfinger.js": "^2.3.2",
-    "webtorrent": "^0.78.1",
+    "webtorrent": "^0.90.0",
     "wt_ilp": "git+ssh://git@github.com:interledger/wt_ilp.git"
   },
   "devDependencies": {
