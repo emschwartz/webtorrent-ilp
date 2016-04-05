@@ -25,8 +25,7 @@ export default class WalletClient extends EventEmitter {
     this.password = opts.password
     this.account = null
 
-    // TODO these should be removed once the wallet returns the right values from webfinger
-    this.walletUri = 'https://' + opts.address.split('@')[1]
+    this.walletSocketIoUri = null
     this.username = opts.address.split('@')[0]
 
     this.socket = null
@@ -39,11 +38,12 @@ export default class WalletClient extends EventEmitter {
   connect () {
     debug('Account address:', this.address)
     return WalletClient.webfingerAddress(this.address)
-      .then((account) => {
+      .then(({ account, socketIOUri }) => {
         this.account = account
+        this.walletSocketIoUri = socketIOUri
 
-        debug('Attempting to connect to wallet: ' + this.walletUri + '/api/socket.io')
-        this.socket = socket(this.walletUri, { path: '/api/socket.io' })
+        debug('Attempting to connect to wallet: ' + this.walletSocketIoUri)
+        this.socket = socket(this.walletSocketIoUri)
         this.socket.on('connect', () => {
           debug('Connected to wallet API socket.io')
           this.ready = true
@@ -177,18 +177,21 @@ export default class WalletClient extends EventEmitter {
           return reject(new Error('Error looking up wallet address: ' + err.message))
         }
 
+        let webFingerDetails = {}
         try {
           for (let link of res.object.links) {
             if (link.rel === 'http://webfinger.net/rel/ledgerAccount') {
-              // TODO also get the wallet API endpoint
-              return resolve(link.href)
+              webFingerDetails.account = link.href
+            } else if (link.rel === 'http://webfinger.net/rel/socketIOUri') {
+              webFingerDetails.socketIOUri = link.href
             }
           }
-          return reject(new Error('Error parsing webfinger response' + JSON.stringify(res)))
         } catch (err) {
           return reject(new Error('Error parsing webfinger response' + err.message))
         }
+        resolve(webFingerDetails)
       })
     })
   }
+
 }
