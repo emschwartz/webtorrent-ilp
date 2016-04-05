@@ -48,30 +48,53 @@ export default class WebTorrentIlp extends WebTorrent {
     this.peerBalances = {}
     // <peerPublicKey>: <[wire, wire]>
     this.peerWires = {}
-
-    // Catch the torrents returned by the following methods to make them
-    // a) wait for the walletClient to be ready and
-    // b) use the wt_ilp extension
-    const functionsToCallOnTorrent = [this._waitForWalletClient.bind(this), this._setupWtIlp.bind(this)]
-    this._catchTorrent('seed', functionsToCallOnTorrent)
-    this._catchTorrent('download', functionsToCallOnTorrent)
-    // client.add is an alias for client.download
-    this.add = this.download
   }
 
-  _catchTorrent (fnName, functionsToCall) {
-    const _this = this
-    const oldFn = this[fnName]
-    this[fnName] = function () {
-      const torrent = oldFn.apply(_this, arguments)
-      // Make sure we don't set up the torrent twice
-      if (!torrent.__setupWithIlp) {
-        for (let fn of functionsToCall) {
-          fn(torrent)
-        }
-        torrent.__setupWithIlp = true
-      }
+  seed () {
+    const torrent = WebTorrent.prototype.seed.apply(this, arguments)
+    if (torrent.__setupWithIlp) {
       return torrent
+    }
+
+    this._makeWaitForWalletClient(torrent)
+    this._setupWtIlp(torrent)
+
+    torrent.__setupWithIlp = true
+    return torrent
+  }
+
+  add () {
+    return this.download.apply(this, arguments)
+  }
+
+  download () {
+    const torrent = WebTorrent.prototype.download.apply(this, arguments)
+    if (torrent.__setupWithIlp) {
+      return torrent
+    }
+
+    this._makeWaitForWalletClient(torrent)
+    this._setupWtIlp(torrent)
+
+    torrent.__setupWithIlp = true
+    return torrent
+  }
+
+  _makeWaitForWalletClient (torrent) {
+    const _this = this
+    // Torrent._onParsedTorrent is the function that starts the swarm
+    // We want it to wait until the walletClient is ready
+    // TODO find a less hacky way of delaying the torrent's start
+    const _onParsedTorrent = torrent._onParsedTorrent
+    torrent._onParsedTorrent = function () {
+      const _arguments = arguments
+      if (_this.walletClient.ready) {
+        _onParsedTorrent.apply(torrent, _arguments)
+      } else {
+        _this.walletClient.once('ready', () => {
+          _onParsedTorrent.apply(torrent, _arguments)
+        })
+      }
     }
   }
 
@@ -82,12 +105,12 @@ export default class WebTorrentIlp extends WebTorrent {
     // TODO find a less hacky way of delaying the torrent's start
     const _onParsedTorrent = torrent._onParsedTorrent
     torrent._onParsedTorrent = function () {
-      const args = arguments
+      const _arguments = arguments
       if (_this.walletClient.ready) {
-        _onParsedTorrent.apply(torrent, args)
+        _onParsedTorrent.apply(torrent, _arguments)
       } else {
         _this.walletClient.once('ready', () => {
-          _onParsedTorrent.apply(torrent, args)
+          _onParsedTorrent.apply(torrent, _arguments)
         })
       }
     }
