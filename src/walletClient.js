@@ -36,29 +36,30 @@ export default class WalletClient extends EventEmitter {
   }
 
   connect () {
+    const _this = this
     debug('Account address:', this.address)
     return WalletClient.webfingerAddress(this.address)
       .then(({ account, socketIOUri }) => {
-        this.account = account
-        this.walletSocketIoUri = socketIOUri
+        _this.account = account
+        _this.walletSocketIoUri = socketIOUri
 
-        debug('Attempting to connect to wallet: ' + this.walletSocketIoUri)
-        this.socket = socket(this.walletSocketIoUri)
-        this.socket.on('connect', () => {
+        debug('Attempting to connect to wallet: ' + _this.walletSocketIoUri)
+        _this.socket = socket(_this.walletSocketIoUri)
+        _this.socket.on('connect', () => {
           debug('Connected to wallet API socket.io')
-          this.ready = true
-          this.emit('ready')
-          this.socket.emit('unsubscribe', this.username)
-          this.socket.emit('subscribe', this.username)
+          _this.socket.emit('unsubscribe', _this.username)
+          _this.socket.emit('subscribe', _this.username)
+          _this.ready = true
+          _this.emit('ready')
         })
-        this.socket.on('disconnect', () => {
-          this.ready = false
+        _this.socket.on('disconnect', () => {
+          _this.ready = false
           debug('Disconnected from wallet')
         })
-        this.socket.on('connect_error', (err) => {
+        _this.socket.on('connect_error', (err) => {
           debug('Connection error', err, err.stack)
         })
-        this.socket.on('payment', this._handleNotification.bind(this))
+        _this.socket.on('payment', _this._handleNotification.bind(_this))
       })
       .catch((err) => {
         debug(err)
@@ -70,6 +71,7 @@ export default class WalletClient extends EventEmitter {
   }
 
   normalizeAmount (params) {
+    const _this = this
     // TODO clean up this caching system
     const cacheRateThreshold = (new BigNumber(params.destinationAmount)).div(100)
     if (this.ratesCache[params.destinationAccount]) {
@@ -99,10 +101,10 @@ export default class WalletClient extends EventEmitter {
           ' is equivalent to ' + sourceAmount + ' on ' + firstPayment.source_transfers[0].ledger)
 
         // TODO cache rate by ledger instead of by account
-        if (!this.ratesCache[params.destinationAccount]) {
-          this.ratesCache[params.destinationAccount] = {}
+        if (!_this.ratesCache[params.destinationAccount]) {
+          _this.ratesCache[params.destinationAccount] = {}
         }
-        this.ratesCache[params.destinationAccount][params.destinationAmount] = {
+        _this.ratesCache[params.destinationAccount][params.destinationAmount] = {
           sourceAmount: new BigNumber(sourceAmount),
           expiresAt: moment().add(RATE_CACHE_REFRESH, 'milliseconds')
         }
