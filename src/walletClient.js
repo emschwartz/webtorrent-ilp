@@ -144,6 +144,7 @@ export default class WalletClient extends EventEmitter {
   }
 
   _handleNotification (payment) {
+    const _this = this
     if (payment.transfers) {
       request.get(payment.transfers)
         .end((err, res) => {
@@ -157,15 +158,29 @@ export default class WalletClient extends EventEmitter {
             // Look for incoming credits or outgoing debits involving us
             for (let credit of transfer.credits) {
               if (credit.account === this.account) {
-                this.emit('incoming', credit)
+                _this.emit('incoming', credit)
               }
             }
-          }
-          if (transfer.state === 'rejected') {
+            // Look for outgoing transfers that were executed
+            for (let debit of transfer.debits) {
+              if (debit.account === this.account) {
+                request.get(transfer.id + '/fulfillment')
+                  .end((err, res) => {
+                    if (err) {
+                      debug('Error getting transfer fulfillment', err)
+                      return
+                    }
+
+                    const fulfillment = res.body
+                    _this.emit('outgoing_executed', debit, fulfillment)
+                  })
+              }
+            }
+          } else if (transfer.state === 'rejected') {
             // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
             for (let debit of transfer.debits) {
               if (debit.account === this.account) {
-                this.emit('outgoing_rejected', debit)
+                _this.emit('outgoing_rejected', debit)
               }
             }
           }
