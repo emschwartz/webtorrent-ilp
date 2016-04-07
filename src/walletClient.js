@@ -9,6 +9,7 @@ import Debug from 'debug'
 const debug = Debug('WebTorrentIlp:WalletClient')
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
+import url from 'url'
 
 const RATE_CACHE_REFRESH = 60000
 
@@ -44,7 +45,10 @@ export default class WalletClient extends EventEmitter {
         _this.walletSocketIoUri = socketIOUri
 
         debug('Attempting to connect to wallet: ' + _this.walletSocketIoUri)
-        _this.socket = socket(_this.walletSocketIoUri)
+        // It's important to parse the URL and pass the parts in separately
+        // otherwise, socket.io thinks the path is a namespace http://socket.io/docs/rooms-and-namespaces/
+        const parsed = url.parse(_this.walletSocketIoUri)
+        _this.socket = socket(parsed.host, { path: parsed.path })
         _this.socket.on('connect', () => {
           debug('Connected to wallet API socket.io')
           _this.socket.emit('unsubscribe', _this.username)
