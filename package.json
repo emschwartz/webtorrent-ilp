@@ -21,7 +21,7 @@
   "license": "ISC",
   "dependencies": {
     "bignumber.js": "^2.3.0",
-    "create-torrent": "https://github.com/interledger/create-torrent.git",
+    "create-torrent": "https://github.com/emschwartz/create-torrent.git",
     "five-bells-sender": "~6.0.0",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
