@@ -1,6 +1,6 @@
 'use strict'
 
-const WebTorrentIlp = require('./index')
+const WebTorrentIlp = require('./build/index')
 const debug = require('debug')('WebTorrentIlp:downloader')
 const crypto = require('crypto')
 

@@ -9,6 +9,7 @@ import Debug from 'debug'
 const debug = Debug('WebTorrentIlp:WalletClient')
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
+import url from 'url'
 
 const RATE_CACHE_REFRESH = 60000
 
@@ -26,6 +27,7 @@ export default class WalletClient extends EventEmitter {
     this.account = null
 
     this.walletSocketIoUri = null
+    // TODO get the username from the WebFinger results
     this.username = opts.address.split('@')[0]
 
     this.socket = null
@@ -43,8 +45,12 @@ export default class WalletClient extends EventEmitter {
         _this.account = account
         _this.walletSocketIoUri = socketIOUri
 
-        debug('Attempting to connect to wallet: ' + _this.walletSocketIoUri)
-        _this.socket = socket(_this.walletSocketIoUri)
+        // It's important to parse the URL and pass the parts in separately
+        // otherwise, socket.io thinks the path is a namespace http://socket.io/docs/rooms-and-namespaces/
+        const parsed = url.parse(_this.walletSocketIoUri)
+        const host = parsed.protocol + '//' + parsed.host
+        debug('Attempting to connect to wallet host: ' + host + ' path: ' + parsed.path)
+        _this.socket = socket(host, { path: parsed.path })
         _this.socket.on('connect', () => {
           debug('Connected to wallet API socket.io')
           _this.socket.emit('unsubscribe', _this.username)
@@ -140,8 +146,10 @@ export default class WalletClient extends EventEmitter {
   }
 
   _handleNotification (payment) {
+    const _this = this
     if (payment.transfers) {
       request.get(payment.transfers)
+        .auth(_this.username, _this.password)
         .end((err, res) => {
           if (err) {
             debug('Error getting transfer', err)
@@ -153,15 +161,30 @@ export default class WalletClient extends EventEmitter {
             // Look for incoming credits or outgoing debits involving us
             for (let credit of transfer.credits) {
               if (credit.account === this.account) {
-                this.emit('incoming', credit)
+                _this.emit('incoming', credit)
               }
             }
-          }
-          if (transfer.state === 'rejected') {
+            // Look for outgoing transfers that were executed
+            for (let debit of transfer.debits) {
+              if (debit.account === this.account) {
+                request.get(transfer.id + '/fulfillment')
+                  .auth(_this.username, _this.password)
+                  .end((err, res) => {
+                    if (err) {
+                      debug('Error getting transfer fulfillment', err)
+                      return
+                    }
+
+                    const fulfillment = res.body
+                    _this.emit('outgoing_executed', debit, fulfillment)
+                  })
+              }
+            }
+          } else if (transfer.state === 'rejected') {
             // TODO use notification of outgoing payments being rejected to subtract from amount sent to peer
             for (let debit of transfer.debits) {
               if (debit.account === this.account) {
-                this.emit('outgoing_rejected', debit)
+                _this.emit('outgoing_rejected', debit)
               }
             }
           }
@@ -171,7 +194,7 @@ export default class WalletClient extends EventEmitter {
 
   // Returns a promise that resolves to the account details
   static webfingerAddress (address) {
-    const WebFingerConstructor = (window && typeof WebFinger !== 'function' ? window.WebFinger : WebFinger)
+    const WebFingerConstructor = (typeof window === 'object' && window.WebFinger ? window.WebFinger : WebFinger)
     const webfinger = new WebFingerConstructor()
     return new Promise((resolve, reject) => {
       webfinger.lookup(address, (err, res) => {

@@ -1,6 +1,5 @@
 'use strict'
 
-import WebTorrent from 'webtorrent'
 import wt_ilp from 'wt_ilp'
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
@@ -9,6 +8,8 @@ import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
 import Decider from './decider'
 import uuid from 'uuid'
+import paymentLicense from 'payment-license'
+import WebTorrent from 'webtorrent'
 
 export default class WebTorrentIlp extends WebTorrent {
   constructor (opts) {
@@ -32,54 +33,94 @@ export default class WebTorrentIlp extends WebTorrent {
     })
     this.walletClient.connect()
     this.walletClient.on('incoming', this._handleIncomingPayment.bind(this))
-    this.walletClient.on('outgoing', this._handleOutgoingPayment.bind(this))
+    this.walletClient.on('outgoing_executed', this._handleOutgoingPayment.bind(this))
     this.walletClient.on('ready', () => this.emit('wallet_ready'))
 
     // <peerPublicKey>: <balance>
     this.peerBalances = {}
     // <peerPublicKey>: <[wire, wire]>
     this.peerWires = {}
-
-    // Catch the torrents returned by the following methods to make them
-    // a) wait for the walletClient to be ready and
-    // b) use the wt_ilp extension
-    const functionsToCallOnTorrent = [this._waitForWalletClient.bind(this), this._setupWtIlp.bind(this)]
-    this._catchTorrent('seed', functionsToCallOnTorrent)
-    this._catchTorrent('download', functionsToCallOnTorrent)
-    // client.add is an alias for client.download
-    this.add = this.download
   }
 
-  _catchTorrent (fnName, functionsToCall) {
-    const _this = this
-    const oldFn = this[fnName]
-    this[fnName] = function () {
-      const torrent = oldFn.apply(_this, arguments)
-      // Make sure we don't set up the torrent twice
-      if (!torrent.__setupWithIlp) {
-        for (let fn of functionsToCall) {
-          fn(torrent)
-        }
-        torrent.__setupWithIlp = true
+  seed () {
+    const torrent = WebTorrent.prototype.seed.apply(this, arguments)
+    this._setupWtIlp(torrent)
+    return torrent
+  }
+
+  add () {
+    return this.download.apply(this, arguments)
+  }
+
+  download () {
+    const torrent = WebTorrent.prototype.download.apply(this, arguments)
+    this._setupWtIlp(torrent)
+    return torrent
+  }
+
+  _payForLicense (torrent) {
+    if (!torrent.license) {
+      torrent.destroy()
+      this.emit('error', new Error('Cannot seed or download torrent without license information'))
+      return
+    }
+
+    // If we already have a valid license, no need to pay for it again
+    if (paymentLicense.isValidLicense(torrent.license)) {
+      return
+    }
+
+    // TODO make license time configurable
+    const DEFAULT_LICENSE_TIME = 60 * 24 // in minutes
+    torrent.license.expires_at = moment().add(DEFAULT_LICENSE_TIME, 'minutes').toISOString()
+
+    // TODO catch errors
+    // TODO check for license type
+    const payment = {
+      destinationAccount: torrent.license.creator_account,
+      destinationAmount: (new BigNumber(DEFAULT_LICENSE_TIME)).times(torrent.license.price_per_minute),
+      destinationMemo: {
+        expires_at: torrent.license.expires_at,
+        licensee_public_key: this.publicKey
+      },
+      sourceMemo: {
+        content_hash: torrent.infoHash
       }
-      return torrent
+    }
+    debug('About to pay for license %o', payment)
+    this.walletClient.sendPayment(payment)
+  }
+
+  // __actuallyStart is set on the torrent by _makeTorrentWaitForWalletAndLicense
+  // We only want to start seeding or downloading once the wallet client is ready
+  // and we have a valid license for the torrent
+  _checkIfTorrentIsReady (torrent) {
+    if (this.walletClient.ready && paymentLicense.isValidLicense(torrent.license)) {
+      torrent.__actuallyStart()
+      return true
+    } else {
+      return false
     }
   }
 
-  _waitForWalletClient (torrent) {
+  // TODO separate out paying for the license because we may only
+  // want to pay for a license once we connect to a peer or one connects to us
+  _makeTorrentWaitForWalletAndLicense (torrent) {
     const _this = this
     // Torrent._onParsedTorrent is the function that starts the swarm
     // We want it to wait until the walletClient is ready
     // TODO find a less hacky way of delaying the torrent's start
     const _onParsedTorrent = torrent._onParsedTorrent
-    torrent._onParsedTorrent = function () {
-      const args = arguments
-      if (_this.walletClient.ready) {
-        _onParsedTorrent.apply(torrent, args)
-      } else {
-        _this.walletClient.once('ready', () => {
-          _onParsedTorrent.apply(torrent, args)
-        })
+    torrent._onParsedTorrent = function (parsedTorrent) {
+      torrent.__actuallyStart = _onParsedTorrent.bind(torrent, parsedTorrent)
+
+      // Get license
+      // Note that _handleOutgoingPayment will call _checkIfTorrentIsReady when a license is received
+      _this._payForLicense(parsedTorrent)
+
+      // Wait for wallet client to be connected
+      if (!_this._checkIfTorrentIsReady(parsedTorrent) && !_this.walletClient.ready) {
+        _this.walletClient.once('ready', () => _this._checkIfTorrentIsReady(parsedTorrent))
       }
     }
   }
@@ -130,7 +171,11 @@ export default class WebTorrentIlp extends WebTorrent {
   }
 
   _setupWtIlp (torrent) {
-    torrent.totalEarned = new BigNumber(0)
+    if (torrent.__setupWithIlp) {
+      return torrent
+    }
+
+    this._makeTorrentWaitForWalletAndLicense(torrent)
 
     torrent.on('wire', this._onWire.bind(this, torrent))
 
@@ -143,6 +188,8 @@ export default class WebTorrentIlp extends WebTorrent {
     torrent.on('error', (err) => {
       debug('torrent error:', err)
     })
+
+    torrent.__setupWithIlp = true
   }
 
   _chargePeerForRequest (wire, torrent, bytesRequested) {
@@ -151,12 +198,12 @@ export default class WebTorrentIlp extends WebTorrent {
 
     // TODO get smarter about how we price the amount (maybe based on torrent rarity?)
     const amountToCharge = this.price.times(bytesRequested / 1000)
+    debug('peer request costs: ' + amountToCharge.toString())
 
     if (peerBalance.greaterThan(amountToCharge)) {
       const newBalance = peerBalance.minus(amountToCharge)
       this.peerBalances[wire.wt_ilp.peerPublicKey] = newBalance
       debug('charging ' + amountToCharge.toString() + ' for request. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0, 8) + ')')
-      torrent.totalEarned = torrent.totalEarned.plus(amountToCharge)
       wire.wt_ilp.unchoke()
     } else {
       // TODO @tomorrow add bidding agent to track how much peer is willing to send at a time
@@ -178,6 +225,7 @@ export default class WebTorrentIlp extends WebTorrent {
   _payPeer (wire, torrent, destinationAmount) {
     const _this = this
     const destinationAccount = wire.wt_ilp.peerAccount
+    debug('pay peer ' + destinationAccount + ' ' + destinationAmount)
     // Convert the destinationAmount into the sourceAmount
     return this.walletClient.normalizeAmount({
       destinationAccount,
@@ -245,7 +293,7 @@ export default class WebTorrentIlp extends WebTorrent {
       }
       const previousBalance = this.peerBalances[peerPublicKey] || new BigNumber(0)
       const newBalance = previousBalance.plus(credit.amount)
-      debug('crediting peer for payment of: ' + credit.amount + '. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0, 8) + ')')
+      debug('Crediting peer for payment of: ' + credit.amount + '. balance now: ' + newBalance + ' (' + peerPublicKey.slice(0, 8) + ')')
       this.peerBalances[peerPublicKey] = newBalance
       this.emit('incoming_payment', {
         peerPublicKey: peerPublicKey,
@@ -259,8 +307,18 @@ export default class WebTorrentIlp extends WebTorrent {
     }
   }
 
-  _handleOutgoingPayment (debit) {
-    // debug('xxx got outgoing debit %o', debit)
+  _handleOutgoingPayment (debit, fulfillment) {
+    if (debit.memo && typeof debit.memo === 'object' && debit.memo.content_hash) {
+      for (let torrent of this.torrents) {
+        if (torrent.infoHash === debit.memo.content_hash) {
+          torrent.license.signature = (typeof fulfillment === 'object' ? fulfillment.signature : fulfillment)
+          debug('Got license for torrent: %s , license signature: %s', torrent.infoHash, torrent.license.signature)
+          // The torrent might be waiting for the license to come back so we
+          // check here if we should start it up now
+          this._checkIfTorrentIsReady(torrent)
+        }
+      }
+    }
   }
 }
 
