@@ -21,17 +21,17 @@
   "license": "ISC",
   "dependencies": {
     "bignumber.js": "^2.3.0",
-    "create-torrent": "git+ssh://git@github.com:interledger/create-torrent.git",
+    "create-torrent": "https://github.com/interledger/create-torrent.git",
     "five-bells-sender": "~6.0.0",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
-    "payment-license": "git+ssh://git@github.com:interledger/payment-license.git",
+    "payment-license": "https://github.com/emschwartz/payment-license.git",
     "socket.io-client": "^1.4.5",
     "superagent": "^1.8.1",
     "uuid": "^2.0.1",
     "webfinger.js": "^2.3.2",
-    "webtorrent": "^0.90.0",
-    "wt_ilp": "git+ssh://git@github.com:interledger/wt_ilp.git"
+    "webtorrent": "https://github.com/emschwartz/webtorrent.git",
+    "wt_ilp": "https://github.com/emschwartz/wt_ilp.git"
   },
   "devDependencies": {
     "babel-cli": "^6.6.5",
