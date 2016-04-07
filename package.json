@@ -22,7 +22,7 @@
   "dependencies": {
     "bignumber.js": "^2.3.0",
     "create-torrent": "git+ssh://git@github.com:interledger/create-torrent.git",
-    "five-bells-sender": "^4.5.0",
+    "five-bells-sender": "~6.0.0",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
     "payment-license": "git+ssh://git@github.com:interledger/payment-license.git",
