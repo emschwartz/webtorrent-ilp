@@ -27,6 +27,7 @@ export default class WalletClient extends EventEmitter {
     this.account = null
 
     this.walletSocketIoUri = null
+    // TODO get the username from the WebFinger results
     this.username = opts.address.split('@')[0]
 
     this.socket = null
@@ -44,11 +45,12 @@ export default class WalletClient extends EventEmitter {
         _this.account = account
         _this.walletSocketIoUri = socketIOUri
 
-        debug('Attempting to connect to wallet: ' + _this.walletSocketIoUri)
         // It's important to parse the URL and pass the parts in separately
         // otherwise, socket.io thinks the path is a namespace http://socket.io/docs/rooms-and-namespaces/
         const parsed = url.parse(_this.walletSocketIoUri)
-        _this.socket = socket(parsed.host, { path: parsed.path })
+        const host = parsed.protocol + '//' + parsed.host
+        debug('Attempting to connect to wallet host: ' + host + ' path: ' + parsed.path)
+        _this.socket = socket(host, { path: parsed.path })
         _this.socket.on('connect', () => {
           debug('Connected to wallet API socket.io')
           _this.socket.emit('unsubscribe', _this.username)
@@ -147,6 +149,7 @@ export default class WalletClient extends EventEmitter {
     const _this = this
     if (payment.transfers) {
       request.get(payment.transfers)
+        .auth(_this.username, _this.password)
         .end((err, res) => {
           if (err) {
             debug('Error getting transfer', err)
@@ -165,6 +168,7 @@ export default class WalletClient extends EventEmitter {
             for (let debit of transfer.debits) {
               if (debit.account === this.account) {
                 request.get(transfer.id + '/fulfillment')
+                  .auth(_this.username, _this.password)
                   .end((err, res) => {
                     if (err) {
                       debug('Error getting transfer fulfillment', err)
