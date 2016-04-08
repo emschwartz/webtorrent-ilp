@@ -23,7 +23,7 @@ export default class WebTorrentIlp extends WebTorrent {
 
     this.startingBid = opts.startingBid || this.price.times(100)
     this.bidDecreaseFactor = opts.bidDecreaseFactor || 0.95
-    this.bidIncreaseFactor = opts.bidIncreaseFactor || 1.5
+    this.bidIncreaseFactor = opts.bidIncreaseFactor || 2
 
     this.decider = new Decider()
 
@@ -177,6 +177,9 @@ export default class WebTorrentIlp extends WebTorrent {
       return torrent
     }
 
+    torrent.totalCost = new BigNumber(0)
+    torrent.licenseCost = new BigNumber(0)
+
     this._makeTorrentWaitForWalletAndLicense(torrent)
 
     torrent.on('wire', this._onWire.bind(this, torrent))
@@ -217,6 +220,9 @@ export default class WebTorrentIlp extends WebTorrent {
         wire.bidAmount = amountToCharge
       }
 
+      // TODO base the precision on the ledger amount
+      wire.bidAmount = wire.bidAmount.round(4, BigNumber.ROUND_UP)
+
       // TODO handle the min ledger amount more elegantly
       const MIN_LEDGER_AMOUNT = '0.0001'
       wire.wt_ilp.sendPaymentRequest(BigNumber.max(wire.bidAmount, MIN_LEDGER_AMOUNT))
@@ -252,6 +258,10 @@ export default class WebTorrentIlp extends WebTorrent {
     .then(({ decision, paymentRequest }) => {
       if (decision === true) {
         const paymentId = uuid.v4()
+
+        // TODO track stats like this in a better way
+        torrent.totalCost = torrent.totalCost.plus(paymentRequest.sourceAmount)
+
         _this.decider.recordPayment({
           ...paymentRequest,
           paymentId
@@ -300,6 +310,7 @@ export default class WebTorrentIlp extends WebTorrent {
         peerPublicKey: peerPublicKey,
         amount: credit.amount
       })
+
       // Unchoke all of this peer's wires
       for (let wire of this.peerWires[peerPublicKey]) {
         wire.unchoke()
@@ -316,6 +327,10 @@ export default class WebTorrentIlp extends WebTorrent {
           if (torrent.license.signature === signature) {
             return
           }
+
+          // TODO track this in a better way
+          torrent.licenseCost = torrent.licenseCost.plus(debit.amount)
+
           torrent.license.signature = signature
           debug('Got license for torrent: %s , license signature: %s', torrent.infoHash, torrent.license.signature)
           this.emit('license', torrent.infoHash, torrent.license)
