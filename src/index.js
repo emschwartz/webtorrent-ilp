@@ -103,6 +103,12 @@ export default class WebTorrentIlp extends WebTorrent {
       // and we have a valid license for this file
       // torrent.pause()
 
+      if (!torrent.info.license) {
+        torrent.destroy()
+        _this.emit('error', new Error('Cannot seed or download torrent without license information. Use the payment-license tool to add license info to file: https://github.com/emschwartz/payment-license'))
+        return
+      }
+
       // TODO should we add the license to the torrent object here
       // or just in a modified version of parse-torrent-file?
       // The only reason not to use a modified parse-torrent-file module is the annoyance
@@ -110,12 +116,6 @@ export default class WebTorrentIlp extends WebTorrent {
       torrent.license = {}
       for (let key of Object.keys(torrent.info.license)) {
         torrent.license[key] = torrent.info.license[key].toString()
-      }
-
-      if (!torrent.license) {
-        torrent.destroy()
-        _this.emit('error', new Error('Cannot seed or download torrent without license information'))
-        return
       }
 
       _this._payForLicense(torrent)
