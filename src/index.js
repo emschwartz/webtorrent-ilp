@@ -97,25 +97,31 @@ export default class WebTorrentIlp extends WebTorrent {
   // TODO separate out paying for the license because we may only
   // want to pay for a license once we connect to a peer or one connects to us
   _makeTorrentWaitForWalletAndLicense (torrent) {
+    const _this = this
     torrent.on('listening', () => {
       // Start out paused and only resume when the wallet client is ready
       // and we have a valid license for this file
-      torrent.pause()
+      // torrent.pause()
 
-      torrent.license = {
-        ...torrent.info.license
+      // TODO should we add the license to the torrent object here
+      // or just in a modified version of parse-torrent-file?
+      // The only reason not to use a modified parse-torrent-file module is the annoyance
+      // of having another forked repo for that one and parse-torrent
+      torrent.license = {}
+      for (let key of Object.keys(torrent.info.license)) {
+        torrent.license[key] = torrent.info.license[key].toString()
       }
 
       if (!torrent.license) {
         torrent.destroy()
-        this.emit('error', new Error('Cannot seed or download torrent without license information'))
+        _this.emit('error', new Error('Cannot seed or download torrent without license information'))
         return
       }
 
-      this._payForLicense(torrent)
+      _this._payForLicense(torrent)
 
-      if (!this.walletClient.ready) {
-        this.walletClient.once('ready', () => this._checkIfTorrentIsReady(torrent))
+      if (!_this.walletClient.ready) {
+        _this.walletClient.once('ready', () => _this._checkIfTorrentIsReady(torrent))
       }
     })
   }
@@ -124,6 +130,7 @@ export default class WebTorrentIlp extends WebTorrent {
     wire.bidAmount = this.price.times(this.startingBid)
     debug('starting bid amount: ' + wire.bidAmount.toString())
 
+    // TODO @tomorrow add license to handshake or add an extra wt_ilp message for exchanging it
     wire.use(wt_ilp({
       account: this.walletClient.account,
       price: this.price,
@@ -236,16 +243,15 @@ export default class WebTorrentIlp extends WebTorrent {
         torrentBytesRemaining: torrent.length - torrent.downloaded,
         timestamp: moment().toISOString()
       }
-      return _this.decider.shouldSendPayment(paymentRequest)
-        .then((decision) => {
-          return { decision, paymentRequest }
-        })
+      return {
+        decision: _this.decider.shouldSendPayment(paymentRequest),
+        paymentRequest
+      }
     })
     // Send payment
     .then(({ decision, paymentRequest }) => {
       if (decision === true) {
         const paymentId = uuid.v4()
-        // TODO we should probably wait until this promise resolves
         _this.decider.recordPayment({
           ...paymentRequest,
           paymentId
@@ -306,7 +312,11 @@ export default class WebTorrentIlp extends WebTorrent {
     if (debit.memo && typeof debit.memo === 'object' && debit.memo.content_hash) {
       for (let torrent of this.torrents) {
         if (torrent.infoHash === debit.memo.content_hash) {
-          torrent.license.signature = (typeof fulfillment === 'object' ? fulfillment.signature : fulfillment)
+          const signature = (typeof fulfillment === 'object' ? fulfillment.signature : fulfillment)
+          if (torrent.license.signature === signature) {
+            return
+          }
+          torrent.license.signature = signature
           debug('Got license for torrent: %s , license signature: %s', torrent.infoHash, torrent.license.signature)
           this.emit('license', torrent.infoHash, torrent.license)
           // The torrent might be waiting for the license to come back so we

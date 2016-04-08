@@ -32,55 +32,54 @@ export default class Decider {
 
   shouldSendPayment (paymentRequest) {
     const { publicKey, torrentHash } = paymentRequest
-    return this.recordPaymentRequest(paymentRequest)
-      .then(() => {
-        debug('checking if we shouldSendPayment')
+    this.recordPaymentRequest(paymentRequest)
+    debug('checking if we shouldSendPayment')
 
-        const peerCostPerByte = this.getCostPerByte({ publicKey, torrentHash })
-        debug('peerCostPerByte: ' + peerCostPerByte.toString() + ' (' + publicKey.slice(0, 8) + ')')
-        if (!peerCostPerByte.isFinite()) {
-          return false
-        }
-        const torrentCostPerByte = this.getCostPerByte({ torrentHash })
-        debug('torrentCostPerByte: ' + torrentCostPerByte.toString())
+    const peerCostPerByte = this.getCostPerByte({ publicKey, torrentHash })
+    debug('peerCostPerByte: ' + peerCostPerByte.toString() + ' (' + publicKey.slice(0, 8) + ')')
+    if (!peerCostPerByte.isFinite()) {
+      return false
+    }
+    const torrentCostPerByte = this.getCostPerByte({ torrentHash })
+    debug('torrentCostPerByte: ' + torrentCostPerByte.toString())
 
-        // Check if there is a cheaper or faster peer
-        const peerSpeed = this.getSpeed({ publicKey, torrentHash, includeTimeToNow: true })
-        const torrentSpeed = this.getSpeed({ torrentHash, includeTimeToNow: true })
-        debug('peerSpeed: ' + peerSpeed.toString() + ' (' + publicKey.slice(0, 8) + ')')
-        debug('torrentSpeed: ' + torrentSpeed.toString())
+    // Check if there is a cheaper or faster peer
+    const peerSpeed = this.getSpeed({ publicKey, torrentHash, includeTimeToNow: true })
+    const torrentSpeed = this.getSpeed({ torrentHash, includeTimeToNow: true })
+    debug('peerSpeed: ' + peerSpeed.toString() + ' (' + publicKey.slice(0, 8) + ')')
+    debug('torrentSpeed: ' + torrentSpeed.toString())
 
-        const numPaymentsInLastTenSeconds = this.getNumPaymentsSinceDate({ publicKey, torrentHash, date: moment().subtract(10, 'seconds') })
-        debug('numPaymentsInLastTenSeconds: ' + numPaymentsInLastTenSeconds.toString())
-        const maxPaymentsPerTenSeconds = 2
-        if (numPaymentsInLastTenSeconds.greaterThan(maxPaymentsPerTenSeconds)) {
-          return false
-        }
+    const maxPaymentsPerInterval = 1
+    const intervalStart = moment().subtract(3, 'seconds')
+    const numPaymentsInRecentInterval = this.getNumPaymentsSinceDate({ publicKey, torrentHash, date: intervalStart })
+    debug('numPaymentsInRecentInterval: ' + numPaymentsInRecentInterval.toString())
+    if (numPaymentsInRecentInterval >= maxPaymentsPerInterval) {
+      return false
+    }
 
-        // TODO @tomorrow create models for the peers that automatically track their speed and cost
+    // TODO @tomorrow create models for the peers that automatically track their speed and cost
 
-        return true
-      })
+    return true
   }
 
   recordPaymentRequest (paymentRequest) {
     debug('Got payment request %o', paymentRequest)
-    return Promise.resolve(this.PaymentRequest.inject(paymentRequest))
+    return this.PaymentRequest.inject(paymentRequest)
   }
 
   recordPayment (payment) {
     debug('recordPayment %o', payment)
-    return Promise.resolve(this.Payment.inject(payment))
+    return this.Payment.inject(payment)
   }
 
   recordFailedPayment (paymentId, err) {
     debug('recordFailedPayment %o Error: %o', paymentId, err)
-    return Promise.resolve(this.Payment.eject(paymentId))
+    return this.Payment.eject(paymentId)
   }
 
   recordDelivery (delivery) {
     debug('recordDelivery %o', delivery)
-    return Promise.resolve(this.Delivery.inject(delivery))
+    return this.Delivery.inject(delivery)
   }
 
   getTotalSent (filters) {
@@ -139,7 +138,7 @@ export default class Decider {
       query.where.torrentHash = { '===': torrentHash }
     }
     if (date) {
-      query.where.timestamp = { '>=': date.toString() }
+      query.where.timestamp = { '>=': date.toISOString() }
     }
     const payments = this.Payment.filter(query)
     return payments.length
