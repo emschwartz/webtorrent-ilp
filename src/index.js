@@ -59,12 +59,6 @@ export default class WebTorrentIlp extends WebTorrent {
   }
 
   _payForLicense (torrent) {
-    if (!torrent.license) {
-      torrent.destroy()
-      this.emit('error', new Error('Cannot seed or download torrent without license information'))
-      return
-    }
-
     // If we already have a valid license, no need to pay for it again
     if (paymentLicense.isValidLicense(torrent.license)) {
       return
@@ -91,38 +85,39 @@ export default class WebTorrentIlp extends WebTorrent {
     this.walletClient.sendPayment(payment)
   }
 
-  // __actuallyStart is set on the torrent by _makeTorrentWaitForWalletAndLicense
-  // We only want to start seeding or downloading once the wallet client is ready
-  // and we have a valid license for the torrent
+  // Note this is called in both _makeTorrentWaitForWalletAndLicense and _handleOutgoingPayment
   _checkIfTorrentIsReady (torrent) {
     if (this.walletClient.ready && paymentLicense.isValidLicense(torrent.license)) {
-      torrent.__actuallyStart()
-      return true
+      torrent.resume()
     } else {
-      return false
+      torrent.pause()
     }
   }
 
   // TODO separate out paying for the license because we may only
   // want to pay for a license once we connect to a peer or one connects to us
   _makeTorrentWaitForWalletAndLicense (torrent) {
-    const _this = this
-    // Torrent._onParsedTorrent is the function that starts the swarm
-    // We want it to wait until the walletClient is ready
-    // TODO find a less hacky way of delaying the torrent's start
-    const _onParsedTorrent = torrent._onParsedTorrent
-    torrent._onParsedTorrent = function (parsedTorrent) {
-      torrent.__actuallyStart = _onParsedTorrent.bind(torrent, parsedTorrent)
+    torrent.on('listening', () => {
+      // Start out paused and only resume when the wallet client is ready
+      // and we have a valid license for this file
+      torrent.pause()
 
-      // Get license
-      // Note that _handleOutgoingPayment will call _checkIfTorrentIsReady when a license is received
-      _this._payForLicense(parsedTorrent)
-
-      // Wait for wallet client to be connected
-      if (!_this._checkIfTorrentIsReady(parsedTorrent) && !_this.walletClient.ready) {
-        _this.walletClient.once('ready', () => _this._checkIfTorrentIsReady(parsedTorrent))
+      torrent.license = {
+        ...torrent.info.license
       }
-    }
+
+      if (!torrent.license) {
+        torrent.destroy()
+        this.emit('error', new Error('Cannot seed or download torrent without license information'))
+        return
+      }
+
+      this._payForLicense(torrent)
+
+      if (!this.walletClient.ready) {
+        this.walletClient.once('ready', () => this._checkIfTorrentIsReady(torrent))
+      }
+    })
   }
 
   _onWire (torrent, wire) {
@@ -313,6 +308,7 @@ export default class WebTorrentIlp extends WebTorrent {
         if (torrent.infoHash === debit.memo.content_hash) {
           torrent.license.signature = (typeof fulfillment === 'object' ? fulfillment.signature : fulfillment)
           debug('Got license for torrent: %s , license signature: %s', torrent.infoHash, torrent.license.signature)
+          this.emit('license', torrent.infoHash, torrent.license)
           // The torrent might be waiting for the license to come back so we
           // check here if we should start it up now
           this._checkIfTorrentIsReady(torrent)
