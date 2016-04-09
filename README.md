@@ -2,7 +2,7 @@
 
 > A modified version of the [WebTorrent](https://github.com/feross/webtorrent) client that pays content creators and seeders using the [Interledger Protocol (ILP)](https://interledger.org).
 
-To see it in action go to [interledger.tech](http://interledger.tech)
+To see it in action go to https://instant-io-ilp.herokuapp.com/
 
 ## Installation
 
