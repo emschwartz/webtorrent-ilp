@@ -3,7 +3,7 @@
 import wt_ilp from 'wt_ilp'
 import moment from 'moment'
 import BigNumber from 'bignumber.js'
-import WalletClient from './walletClient'
+import WalletClient from 'five-bells-wallet-client'
 import Debug from 'debug'
 const debug = Debug('WebTorrentIlp')
 import Decider from './decider'
@@ -32,9 +32,9 @@ export default class WebTorrentIlp extends WebTorrent {
       password: opts.password
     })
     this.walletClient.connect()
-    this.walletClient.on('incoming', this._handleIncomingPayment.bind(this))
-    this.walletClient.on('outgoing_executed', this._handleOutgoingPayment.bind(this))
-    this.walletClient.on('ready', () => this.emit('wallet_ready'))
+      .then(() => this.emit('wallet_ready'))
+    this.walletClient.on('incoming_transfer', this._handleIncomingPayment.bind(this))
+    this.walletClient.on('outgoing_fulfillment', this._handleOutgoingPayment.bind(this))
 
     // <peerPublicKey>: <balance>
     this.peerBalances = {}
@@ -87,7 +87,7 @@ export default class WebTorrentIlp extends WebTorrent {
 
   // Note this is called in both _makeTorrentWaitForWalletAndLicense and _handleOutgoingPayment
   _checkIfTorrentIsReady (torrent) {
-    if (this.walletClient.ready && paymentLicense.isValidLicense(torrent.license)) {
+    if (this.walletClient.isConnected() && paymentLicense.isValidLicense(torrent.license)) {
       torrent.resume()
     } else {
       torrent.pause()
@@ -120,7 +120,7 @@ export default class WebTorrentIlp extends WebTorrent {
 
       _this._payForLicense(torrent)
 
-      if (!_this.walletClient.ready) {
+      if (!_this.walletClient.isConnected()) {
         _this.walletClient.once('ready', () => _this._checkIfTorrentIsReady(torrent))
       }
     })
@@ -235,7 +235,7 @@ export default class WebTorrentIlp extends WebTorrent {
     const destinationAccount = wire.wt_ilp.peerAccount
     debug('pay peer ' + destinationAccount + ' ' + destinationAmount)
     // Convert the destinationAmount into the sourceAmount
-    return this.walletClient.normalizeAmount({
+    return this.walletClient.convertAmount({
       destinationAccount,
       destinationAmount
     })
@@ -296,7 +296,8 @@ export default class WebTorrentIlp extends WebTorrent {
     })
   }
 
-  _handleIncomingPayment (credit) {
+  _handleIncomingPayment (transfer) {
+    const credit = transfer.credits[0]
     if (credit.memo && typeof credit.memo === 'object') {
       const peerPublicKey = credit.memo.public_key
       if (!peerPublicKey) {
@@ -319,7 +320,8 @@ export default class WebTorrentIlp extends WebTorrent {
     }
   }
 
-  _handleOutgoingPayment (debit, fulfillment) {
+  _handleOutgoingPayment (transfer, fulfillment) {
+    const debit = transfer.debits[0]
     if (debit.memo && typeof debit.memo === 'object' && debit.memo.content_hash) {
       for (let torrent of this.torrents) {
         if (torrent.infoHash === debit.memo.content_hash) {

@@ -23,14 +23,11 @@
   "dependencies": {
     "bignumber.js": "^2.3.0",
     "create-torrent": "https://github.com/emschwartz/create-torrent.git",
-    "five-bells-sender": "https://github.com/interledger/five-bells-sender.git#task/remove-validation",
+    "five-bells-wallet-client": "1.0.0",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
     "payment-license": "https://github.com/emschwartz/payment-license.git",
-    "socket.io-client": "^1.4.5",
-    "superagent": "^1.8.1",
     "uuid": "^2.0.1",
-    "webfinger.js": "^2.3.2",
     "webtorrent": "https://github.com/emschwartz/webtorrent.git",
     "wt_ilp": "https://github.com/emschwartz/wt_ilp.git"
   },
