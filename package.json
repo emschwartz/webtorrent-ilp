@@ -23,7 +23,7 @@
   "dependencies": {
     "bignumber.js": "^2.3.0",
     "create-torrent": "https://github.com/emschwartz/create-torrent.git",
-    "five-bells-wallet-client": "1.0.0",
+    "five-bells-wallet-client": "https://github.com/interledger/five-bells-wallet-client.git",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
     "payment-license": "https://github.com/emschwartz/payment-license.git",
