@@ -49,11 +49,7 @@ export default class WebTorrentIlp extends WebTorrent {
   }
 
   add () {
-    return this.download.apply(this, arguments)
-  }
-
-  download () {
-    const torrent = WebTorrent.prototype.download.apply(this, arguments)
+    const torrent = WebTorrent.prototype.add.apply(this, arguments)
     this._setupWtIlp(torrent)
     return torrent
   }
