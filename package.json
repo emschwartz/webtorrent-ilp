@@ -8,7 +8,7 @@
     "build": "npm i --only=dev --ignore-scripts && ./node_modules/.bin/babel src -d build",
     "watch": "babel src -w -d build",
     "prepublish": "npm run build",
-    "postinstall": "npm run build",
+    "postinstall": "postinstall-build build 'npm run build'",
     "lint": "standard src/*"
   },
   "keywords": [
@@ -27,6 +27,7 @@
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
     "payment-license": "https://github.com/emschwartz/payment-license.git",
+    "postinstall-build": "^0.2.1",
     "uuid": "^2.0.1",
     "webtorrent": "https://github.com/emschwartz/webtorrent.git",
     "wt_ilp": "https://github.com/emschwartz/wt_ilp.git"
