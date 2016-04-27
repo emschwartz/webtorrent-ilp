@@ -5,7 +5,7 @@
   "main": "build/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "npm i --only=dev --ignore-scripts && ./node_modules/.bin/babel src -d build",
+    "build": "babel src -d build",
     "watch": "babel src -w -d build",
     "prepublish": "npm run build",
     "postinstall": "postinstall-build build 'npm run build'",
