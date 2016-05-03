@@ -79,6 +79,12 @@ export default class WebTorrentIlp extends WebTorrent {
     }
     debug('About to pay for license %o', payment)
     this.walletClient.sendPayment(payment)
+      .then((result) => {
+        debug('Sent payment: %o', result)
+      })
+      .catch((err) => {
+        debug('Error sending payment: %o', err)
+      })
   }
 
   // Note this is called in both _makeTorrentWaitForWalletAndLicense and _handleOutgoingPayment
@@ -94,7 +100,7 @@ export default class WebTorrentIlp extends WebTorrent {
   // want to pay for a license once we connect to a peer or one connects to us
   _makeTorrentWaitForWalletAndLicense (torrent) {
     const _this = this
-    torrent.on('listening', () => {
+    torrent.on('infoHash', () => {
       // Start out paused and only resume when the wallet client is ready
       // and we have a valid license for this file
       // torrent.pause()
@@ -172,6 +178,8 @@ export default class WebTorrentIlp extends WebTorrent {
     if (torrent.__setupWithIlp) {
       return torrent
     }
+
+    debug('Setting up torrent with ILP details')
 
     torrent.totalCost = new BigNumber(0)
     torrent.licenseCost = new BigNumber(0)
