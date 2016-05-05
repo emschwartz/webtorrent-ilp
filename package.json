@@ -22,15 +22,19 @@
   "license": "ISC",
   "dependencies": {
     "bignumber.js": "^2.3.0",
+    "concat-stream": "^1.5.1",
     "create-torrent": "https://github.com/emschwartz/create-torrent.git",
     "five-bells-wallet-client": "https://github.com/interledger/five-bells-wallet-client.git",
     "js-data": "^2.9.0",
     "moment": "^2.12.0",
     "payment-license": "https://github.com/emschwartz/payment-license.git",
     "postinstall-build": "^0.2.1",
+    "run-parallel": "^1.1.6",
     "uuid": "^2.0.1",
-    "webtorrent": "https://github.com/emschwartz/webtorrent.git",
-    "wt_ilp": "https://github.com/emschwartz/wt_ilp.git"
+    "webtorrent": "~0.91.4",
+    "wt_ilp": "https://github.com/emschwartz/wt_ilp.git",
+    "xtend": "^4.0.1",
+    "zero-fill": "^2.2.3"
   },
   "devDependencies": {
     "babel-cli": "^6.6.5",

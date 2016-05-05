@@ -10,6 +10,14 @@ import Decider from './decider'
 import uuid from 'uuid'
 import paymentLicense from 'payment-license'
 import WebTorrent from 'webtorrent'
+import createTorrent from 'create-torrent'
+
+// Dependencies of webtorrent needed for the WebTorrentSeed function (below)
+import path from 'path'
+import extend from 'extend'
+import zeroFill from 'zero-fill'
+import parallel from 'run-parallel'
+import concat from 'concat-stream'
 
 export default class WebTorrentIlp extends WebTorrent {
   constructor (opts) {
@@ -43,7 +51,9 @@ export default class WebTorrentIlp extends WebTorrent {
   }
 
   seed () {
-    const torrent = WebTorrent.prototype.seed.apply(this, arguments)
+    // Note this uses the WebTorrentSeed function (below) that is a copied version of WebTorrent.seed
+    const torrent = WebTorrentSeed.apply(this, arguments)
+    // const torrent = WebTorrentSeed.apply(this, arguments)
     this._setupWtIlp(torrent)
     return torrent
   }
@@ -347,6 +357,89 @@ export default class WebTorrentIlp extends WebTorrent {
       }
     }
   }
+}
+
+// This is a copy of the WebTorrent.seed function, copied here
+// so that is uses the modified create-torrent that includes payment-license.
+// This allows us to avoid having a forked version of WebTorrent just for this dependency change
+const VERSION = require('../package.json').version
+const VERSION_STR = VERSION.match(/([0-9]+)/g).slice(0, 2).map(zeroFill(2)).join('')
+function WebTorrentSeed (input, opts, onseed) {
+  var self = this
+  if (self.destroyed) throw new Error('client is destroyed')
+  if (typeof opts === 'function') return self.seed(input, null, opts)
+
+  debug('seed')
+  opts = opts ? extend(opts) : {}
+
+  // When seeding from fs path, initialize store from that path to avoid a copy
+  if (typeof input === 'string') opts.path = path.dirname(input)
+  if (!opts.createdBy) opts.createdBy = 'WebTorrent/' + VERSION_STR
+  if (!self.tracker) opts.announce = []
+
+  var torrent = self.add(null, opts, onTorrent)
+  var streams
+
+  if (!Array.isArray(input)) input = [ input ]
+  parallel(input.map(function (item) {
+    return function (cb) {
+      if (isReadable(item)) concat(item, cb)
+      else cb(null, item)
+    }
+  }), function (err, input) {
+    if (self.destroyed) return
+    if (err) return torrent._destroy(err)
+
+    createTorrent.parseInput(input, opts, function (err, files) {
+      if (self.destroyed) return
+      if (err) return torrent._destroy(err)
+
+      streams = files.map(function (file) {
+        return file.getStream
+      })
+
+      createTorrent(input, opts, function (err, torrentBuf) {
+        if (self.destroyed) return
+        if (err) return torrent._destroy(err)
+
+        var existingTorrent = self.get(torrentBuf)
+        if (existingTorrent) {
+          torrent._destroy(new Error('Cannot add duplicate torrent ' + existingTorrent.infoHash))
+        } else {
+          torrent._onTorrentId(torrentBuf)
+        }
+      })
+    })
+  })
+
+  function onTorrent (torrent) {
+    var tasks = [
+      function (cb) {
+        torrent.load(streams, cb)
+      }
+    ]
+    if (self.dht) {
+      tasks.push(function (cb) {
+        torrent.once('dhtAnnounce', cb)
+      })
+    }
+    parallel(tasks, function (err) {
+      if (self.destroyed) return
+      if (err) return torrent._destroy(err)
+      _onseed(torrent)
+    })
+  }
+
+  function _onseed (torrent) {
+    debug('on seed')
+    if (typeof onseed === 'function') onseed(torrent)
+    self.emit('seed', torrent)
+  }
+
+  return torrent
+}
+function isReadable (obj) {
+  return typeof obj === 'object' && obj != null && typeof obj.pipe === 'function'
 }
 
 // Note that using module.exports instead of export const here is a hack
